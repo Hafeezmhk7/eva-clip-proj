@@ -11,7 +11,7 @@
 #SBATCH --error=./slurm_out/clip_pred_eva_guid_1shard_%j.err
 
 # =============================================================================
-# Universal BLIP3-o Denoising Training with WandB Integration - FIXED
+# Universal BLIP3-o Denoisimporing Training with WandB Integration - FIXED
 # Supports both EVA denoising and CLIP denoising with EVA conditioning
 # =============================================================================
 
@@ -74,7 +74,7 @@ TASK_MODE="clip_denoising"          # NEW: CLIP denoising with EVA conditioning
 # =============================================================================
 
 EMBEDDINGS_DIR="/scratch-shared/azadaianchuk1/blip3o_workspace/embeddings/patch_only_256_tokens"
-OUTPUT_DIR="./checkpoints/universal_${TASK_MODE}_$(date +%Y%m%d_%H%M%S)"
+OUTPUT_DIR="/scratch-shared/azadaianchuk1/blip3o_workspace/${TASK_MODE}_$(date +%Y%m%d_%H%M%S)"
 TRAINING_MODE="patch_only"
 MODEL_SIZE="base"
 
