@@ -1,160 +1,281 @@
-# EVA-CLIP Reproduction with BLIP3-o DiT
+# Universal BLIP3-o Denoising
 
-A PyTorch implementation for reproducing clean EVA-CLIP embeddings from noisy inputs using a BLIP3-o inspired Diffusion Transformer (DiT) architecture with flow matching.
+A unified framework for both **EVA-CLIP denoising** and **CLIP-ViT denoising with EVA conditioning** using spherical flow matching.
 
-## Overview
+## 🎯 Tasks Supported
 
-This project implements and validates a BLIP3-o DiT architecture by training it to reproduce clean EVA-CLIP embeddings from noisy versions, conditioned on CLIP embeddings. This serves as an effective way to test if the DiT architecture is implemented correctly.
-
-**Task**: `noisy_eva_embeddings + clip_conditioning → clean_eva_embeddings`
-
-## Key Features
-
-- **Fixed Architecture**: BLIP3-o DiT with 3D RoPE, Grouped-Query Attention, and Sandwich Normalization
-- **Rectified Flow Matching**: Modern flow-based generative modeling
-- **Comprehensive Evaluation**: Cosine similarity metrics and quality assessments
-- **Overfitting Test**: Verify model can learn by overfitting on small dataset
-- **Robust Training**: Fixed gradient flow, proper initialization, and numerical stability
-
-## Quick Start
-
-### 1. Installation
-
-```bash
-# Clone and setup
-git clone <your-repo>
-cd eva-reproduction
-pip install -r requirements.txt
+### 1. EVA Denoising (Original)
+```
+Input: Noisy EVA [B, N, 4096] → Output: Clean EVA [B, N, 4096]
+Conditioning: Clean EVA [B, N, 4096]
 ```
 
-### 2. Prepare Data
-
-```bash
-# Extract embeddings from your image-text dataset
-python extract_embeddings.py \
-    --input_dir /path/to/images \
-    --output_dir ./embeddings \
-    --batch_size 32
+### 2. CLIP Denoising with EVA Conditioning (New)
+```
+Input: Noisy CLIP [B, N, 1024] → Output: Clean CLIP [B, N, 1024]  
+Conditioning: Clean EVA [B, N, 4096]
 ```
 
-### 3. Train Model
+## 🏗️ Architecture Overview
 
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                 Universal BLIP3-o DiT Architecture             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Input Embeddings        Conditioning                           │
+│  ┌─────────────────┐    ┌─────────────────┐                    │
+│  │ Noisy EVA/CLIP  │    │  Clean EVA      │                    │
+│  │ [B,N,1024/4096] │    │  [B,N,4096]     │                    │
+│  └─────────┬───────┘    └─────────┬───────┘                    │
+│           │                      │                            │
+│           ▼                      ▼                            │
+│  ┌─────────────────┐    ┌─────────────────┐                    │
+│  │ Input Projection│    │ Cond Projection │                    │
+│  │ dim→768         │    │ 4096→768        │                    │
+│  └─────────┬───────┘    └─────────┬───────┘                    │
+│           │                      │                            │
+│           ▼                      ▼                            │
+│  ┌─────────────────────────────────────────┐                    │
+│  │          DiT Transformer Blocks         │                    │
+│  │  ┌─────────────────────────────────────┐│                    │
+│  │  │ Self-Attention + AdaLN(timestep)   ││                    │
+│  │  │ Cross-Attention(input, conditioning)││                    │
+│  │  │ FFN + AdaLN(timestep)               ││                    │
+│  │  └─────────────────────────────────────┘│                    │
+│  │               × num_layers              │                    │
+│  └─────────────────┬───────────────────────┘                    │
+│                   ▼                                            │
+│  ┌─────────────────────────────────────────┐                    │
+│  │ Output Projection: 768→1024/4096        │                    │
+│  └─────────────────┬───────────────────────┘                    │
+│                   ▼                                            │
+│  ┌─────────────────────────────────────────┐                    │
+│  │ Clean EVA/CLIP [B,N,1024/4096]          │                    │
+│  └─────────────────────────────────────────┘                    │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## 🌊 Flow Matching Process
+
+### EVA Denoising Flow
+```
+t=0 (Noise)        t=0.5 (Mixed)         t=1 (Clean)
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│ Random      │    │ Interpolated│    │ Clean EVA   │
+│ EVA [4096]  │───▶│ EVA [4096]  │───▶│ [4096]      │
+│ (on sphere) │    │ (slerp)     │    │ (target)    │
+└─────────────┘    └─────────────┘    └─────────────┘
+       ▲                  ▲                  ▲
+       │                  │                  │
+    Condition:         Condition:         Condition:
+   Clean EVA          Clean EVA          Clean EVA
+```
+
+### CLIP Denoising Flow  
+```
+t=0 (Noise)        t=0.5 (Mixed)         t=1 (Clean)
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│ Random      │    │ Interpolated│    │ Clean CLIP  │
+│ CLIP [1024] │───▶│ CLIP [1024] │───▶│ [1024]      │
+│ (on sphere) │    │ (slerp)     │    │ (target)    │
+└─────────────┘    └─────────────┘    └─────────────┘
+       ▲                  ▲                  ▲
+       │                  │                  │
+    Condition:         Condition:         Condition:
+   Clean EVA          Clean EVA          Clean EVA
+   [4096]             [4096]             [4096]
+```
+
+## 🚀 Quick Start
+
+### 1. EVA Denoising (Original Task)
 ```bash
-# Basic training
-python train_eva_reproduction.py \
-    --chunked_embeddings_dir ./embeddings \
-    --output_dir ./checkpoints \
+python train_universal_denoising.py \
+    --task_mode eva_denoising \
+    --chunked_embeddings_dir /path/to/embeddings \
+    --output_dir ./checkpoints_eva \
+    --model_size base \
     --batch_size 8 \
-    --num_epochs 10
-
-# Overfitting test (recommended first)
-python train_eva_reproduction.py \
-    --chunked_embeddings_dir ./embeddings \
-    --output_dir ./checkpoints \
-    --overfit_test_size 10 \
-    --batch_size 4 \
-    --num_epochs 20
+    --num_epochs 10 \
+    --learning_rate 1e-4
 ```
 
-### 4. Evaluate Results
+### 2. CLIP Denoising with EVA Conditioning (New Task)
+```bash
+python train_universal_denoising.py \
+    --task_mode clip_denoising \
+    --chunked_embeddings_dir /path/to/embeddings \
+    --output_dir ./checkpoints_clip \
+    --model_size base \
+    --batch_size 8 \
+    --num_epochs 10 \
+    --learning_rate 1e-4
+```
+
+## 📊 Expected Performance
+
+### EVA Denoising
+- **Excellent**: Cosine similarity > 0.8
+- **Good**: Cosine similarity > 0.7  
+- **Fair**: Cosine similarity > 0.5
+
+### CLIP Denoising
+- **Excellent**: Cosine similarity > 0.7
+- **Good**: Cosine similarity > 0.6
+- **Fair**: Cosine similarity > 0.4
+
+## 🧪 Overfitting Test
+
+Test if the architecture can learn by overfitting on a small dataset:
 
 ```bash
-python evaluate_model.py \
-    --model_path ./checkpoints \
-    --embeddings_dir ./embeddings \
-    --output_dir ./evaluation \
-    --num_samples 1000
+python train_universal_denoising.py \
+    --task_mode clip_denoising \
+    --chunked_embeddings_dir /path/to/embeddings \
+    --output_dir ./test_overfit \
+    --overfit_test_size 20 \
+    --batch_size 4 \
+    --num_epochs 50 \
+    --max_shards 1
 ```
 
-## Architecture Details
+Expected: >0.8 similarity on overfitting test indicates working architecture.
 
-### BLIP3-o DiT Components
-- **3D Rotary Position Embedding (RoPE)**: Spatial-aware positional encoding
-- **Grouped-Query Attention**: Efficient multi-head attention with key-value sharing
-- **Sandwich Normalization**: RMSNorm before and after each sublayer
-- **Adaptive Layer Normalization**: Timestep-conditioned normalization
+## 📁 Data Format
+
+Your embeddings directory should contain:
+```
+embeddings/
+├── embeddings_shard_00000_patch_only.pkl  # Contains both CLIP and EVA
+├── embeddings_shard_00001_patch_only.pkl
+├── ...
+└── embeddings_manifest.json
+```
+
+Each shard file contains:
+```python
+{
+    'clip_blip3o_embeddings': torch.Tensor,  # [N, 256, 1024]
+    'eva_blip3o_embeddings': torch.Tensor,   # [N, 256, 4096] 
+    'captions': List[str],                   # [N]
+    'keys': List[str]                        # [N]
+}
+```
+
+## 🔧 Key Parameters
+
+### Task Configuration
+- `--task_mode`: `eva_denoising` or `clip_denoising`
+- `--model_size`: `tiny`, `small`, `base`, `large`
+- `--training_mode`: `patch_only` (256 tokens) or `cls_patch` (257 tokens)
+
+### Training Hyperparameters
+- `--learning_rate`: 1e-4 (conservative for spherical flow)
+- `--batch_size`: 8 (adjust based on GPU memory)
+- `--max_grad_norm`: 1.0 (critical for stability)
+- `--sphere_constraint_weight`: 0.1 (ensures unit sphere)
 
 ### Flow Matching
-- **Rectified Flow**: Linear interpolation between noise and target
-- **Velocity Prediction**: Model predicts `v = target - noise`
-- **L2 Normalized Embeddings**: Ensures stable training dynamics
+- `--prediction_type`: `velocity` (recommended)
+- `--noise_schedule`: `uniform` or `cosine`
+- `--max_noise_level`: 0.9 (maximum corruption)
+- `--min_noise_level`: 0.1 (minimum corruption)
 
-## File Structure
+## 🎯 Success Indicators
 
-```
-├── fixed_model.py              # BLIP3-o DiT implementation
-├── fixed_loss.py               # Flow matching loss function
-├── fixed_dataset.py            # Data loading and preprocessing
-├── fixed_trainer.py            # Training loop and optimization
-├── train_eva_reproduction.py   # Main training script
-├── evaluate_model.py           # Evaluation script
-├── extract_embeddings.py       # Embedding extraction (implement as needed)
-└── requirements.txt            # Dependencies
-```
+### During Training
+✅ **Non-zero gradients** from first step  
+✅ **Decreasing loss** trend  
+✅ **Increasing cosine similarity** (target: 0.0 → 0.5+)  
+✅ **Stable norms** ≈ 1.0 (unit sphere maintained)  
+✅ **No NaN/Inf** issues  
 
-## Expected Results
+### Evaluation Metrics
+- **Main metric**: Cosine similarity between generated and target
+- **Quality ratios**: % samples above similarity thresholds
+- **Sphere violation**: How well unit sphere is maintained  
+- **Angular distance**: Alternative similarity measure
 
-### Success Indicators
-- **Loss Decrease**: Training loss should decrease steadily
-- **Velocity Similarity**: Should increase from ~0.01 to >0.1
-- **EVA Similarity**: Evaluation similarity should reach >0.4 (good), >0.7 (excellent)
-- **Overfitting Test**: Should achieve >0.8 similarity on small dataset
+## 🔬 Architecture Details
 
-### Quality Thresholds
-- **>0.7**: High quality reproduction
-- **>0.8**: Very high quality reproduction  
-- **>0.9**: Excellent quality reproduction
+### Universal Design
+- **Input dimensions**: Auto-adapts to 1024 (CLIP) or 4096 (EVA)
+- **Output dimensions**: Matches input dimensions  
+- **Conditioning**: Always EVA 4096-dim via cross-attention
+- **Hidden size**: Configurable (384/512/768/1024)
 
-## Troubleshooting
+### Key Components
+- **RMSNorm**: More stable than LayerNorm
+- **Grouped-Query Attention**: Memory efficient
+- **3D RoPE**: Better positional encoding
+- **AdaLN**: Timestep-conditioned normalization
+- **Cross-attention**: Flexible conditioning
+
+### Spherical Flow Matching
+- **SLERP interpolation**: Proper spherical interpolation
+- **Velocity prediction**: More stable than noise prediction
+- **Unit sphere constraints**: L2 normalization enforced
+- **Gradient clipping**: Prevents instability
+
+## 🐛 Debugging
 
 ### Common Issues
+1. **Negative similarities**: Check normalization, reduce learning rate
+2. **NaN gradients**: Enable gradient clipping, reduce batch size  
+3. **Poor convergence**: Try overfitting test first
+4. **Memory issues**: Reduce batch size or model size
 
-**Zero Gradients**
-- Fixed with proper initialization and gradient flow
-- Check `fixed_model.py` for initialization improvements
+### Debug Mode
+```bash
+--debug_mode --overfit_test_size 10 --max_shards 1
+```
 
-**NaN/Inf Values**
-- L2 normalization with epsilon stability
-- Proper timestep clamping in loss function
+### Monitoring
+- Watch for **non-zero gradients** 
+- **Loss should decrease** within first epoch
+- **Similarity should increase** from ~0.01 to >0.1
+- **Norms should stay** near 1.0
 
-**Poor Convergence**
-- Try overfitting test first with 10-50 samples
-- Reduce learning rate or increase warmup steps
-- Check data normalization
+## 📚 File Structure
 
-### Debugging Tips
+```
+src/modules/
+├── config/
+│   └── blip3o_config.py          # Universal config with task modes
+├── models/  
+│   └── blip3o_eva_dit.py         # Universal DiT model
+├── losses/
+│   └── blip3o_eva_loss.py        # Universal spherical loss
+├── datasets/
+│   └── blip3o_eva_dataset.py     # Universal dataset
+└── trainers/
+    └── blip3o_eva_trainer.py     # Universal trainer
 
-1. **Start with Overfitting Test**: Use `--overfit_test_size 10` to verify model can learn
-2. **Enable Debug Mode**: Use `--debug_mode` for detailed logging
-3. **Monitor Gradients**: Check for zero or exploding gradients in logs
-4. **Validate Data**: Ensure embeddings are properly normalized
+train_universal_denoising.py      # Main training script
+```
 
-## Configuration Options
+## 🎉 What's New
 
-### Model Sizes
-- `tiny`: 384 dim, 6 layers (for testing)
-- `small`: 512 dim, 8 layers
-- `base`: 768 dim, 12 layers (recommended)
-- `large`: 1024 dim, 16 layers
+### Universal Architecture
+- ✅ **Single codebase** for both EVA and CLIP denoising
+- ✅ **Task-adaptive dimensions** automatically configured
+- ✅ **Flexible cross-attention** handles different conditioning sizes
+- ✅ **Universal evaluation metrics** with task-specific thresholds
 
-### Training Modes
-- `patch_only`: 256 tokens (16x16 patches)
-- `cls_patch`: 257 tokens (CLS + 256 patches)
+### CLIP Denoising Features
+- ✅ **1024D spherical flow** for CLIP embeddings
+- ✅ **4096D EVA conditioning** via cross-attention  
+- ✅ **Proper dimension handling** throughout pipeline
+- ✅ **Task-specific quality thresholds** for evaluation
 
-## Key Fixes Applied
+### Improved Training
+- ✅ **Better initialization** for spherical flow
+- ✅ **Enhanced gradient monitoring** and clipping
+- ✅ **Task-aware logging** and metrics
+- ✅ **Comprehensive debugging** tools
 
-1. **Gradient Flow**: Fixed initialization and attention computation
-2. **Data Pipeline**: Corrected input/output handling and normalization
-3. **Loss Function**: Improved numerical stability and target computation
-4. **Architecture**: Proper BLIP3-o implementation with all components
-5. **Training Loop**: Robust error handling and monitoring
+---
 
-## Citation
-
-If you use this code, please cite the relevant papers:
-- BLIP3-o (original paper)
-- Rectified Flow (flow matching method)
-
-## License
-
-MIT License - see LICENSE file for details.
+**Ready to train!** Start with the overfitting test to validate your setup, then run full training on your task of choice.

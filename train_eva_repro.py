@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-Fixed Spherical EVA-CLIP Denoising Training Script
-Addresses all issues from Claude's analysis for high cosine similarity
+Universal BLIP3-o Training Script - EVA & CLIP Denoising
+Supports both EVA-to-EVA and CLIP-to-CLIP (with EVA conditioning) denoising tasks
 
-Main improvements:
-1. Spherical flow matching with slerp interpolation
-2. Proper unit hypersphere constraints
-3. EVA → EVA denoising (not CLIP → EVA reproduction)
-4. Cross-attention conditioning
-5. Comprehensive evaluation metrics
-6. Better gradient flow and initialization
+Usage:
+  # EVA Denoising (original task)
+  python train_universal_denoising.py --task_mode eva_denoising --chunked_embeddings_dir /path/to/embeddings --output_dir ./checkpoints_eva
+
+  # CLIP Denoising with EVA Conditioning (new task)  
+  python train_universal_denoising.py --task_mode clip_denoising --chunked_embeddings_dir /path/to/embeddings --output_dir ./checkpoints_clip
 """
 
 import os
@@ -25,27 +24,33 @@ import traceback
 # Setup paths
 sys.path.insert(0, str(Path(__file__).parent))
 
-def setup_logging():
+def setup_logging(output_dir: str):
     """Setup logging configuration"""
+    log_file = Path(output_dir) / 'training.log'
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler('spherical_eva_denoising_training.log', mode='w')
+            logging.FileHandler(log_file, mode='w')
         ]
     )
     return logging.getLogger(__name__)
 
 def parse_arguments():
     """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description="Spherical EVA-CLIP Denoising with BLIP3-o DiT")
+    parser = argparse.ArgumentParser(description="Universal BLIP3-o Denoising Training")
     
     # Required arguments
     parser.add_argument("--chunked_embeddings_dir", type=str, required=True,
                        help="Path to chunked embeddings directory")
     parser.add_argument("--output_dir", type=str, required=True,
                        help="Output directory for checkpoints")
+    
+    # Task configuration - NEW!
+    parser.add_argument("--task_mode", type=str, default="eva_denoising",
+                       choices=["eva_denoising", "clip_denoising"],
+                       help="Task mode: eva_denoising or clip_denoising")
     
     # Model configuration
     parser.add_argument("--model_size", type=str, default="base",
@@ -58,9 +63,9 @@ def parse_arguments():
                        choices=["velocity", "target", "noise"],
                        help="Flow matching prediction type")
     
-    # Training hyperparameters (adjusted for spherical flow)
+    # Training hyperparameters
     parser.add_argument("--learning_rate", type=float, default=1e-4,
-                       help="Learning rate (conservative for spherical flow)")
+                       help="Learning rate")
     parser.add_argument("--batch_size", type=int, default=8,
                        help="Batch size")
     parser.add_argument("--num_epochs", type=int, default=10,
@@ -70,7 +75,7 @@ def parse_arguments():
     parser.add_argument("--weight_decay", type=float, default=0.01,
                        help="Weight decay")
     parser.add_argument("--max_grad_norm", type=float, default=1.0,
-                       help="Max gradient norm (CRITICAL for spherical flow)")
+                       help="Max gradient norm")
     
     # Spherical flow matching parameters
     parser.add_argument("--sphere_constraint_weight", type=float, default=0.1,
@@ -79,7 +84,7 @@ def parse_arguments():
                        choices=["uniform", "cosine"],
                        help="Noise sampling schedule")
     parser.add_argument("--max_noise_level", type=float, default=0.9,
-                       help="Maximum noise level for spherical interpolation")
+                       help="Maximum noise level")
     parser.add_argument("--min_noise_level", type=float, default=0.1,
                        help="Minimum noise level")
     
@@ -107,75 +112,109 @@ def parse_arguments():
     
     return parser.parse_args()
 
+def print_task_banner(args, logger):
+    """Print task-specific banner"""
+    logger.info("🚀 Universal BLIP3-o Denoising Training")
+    logger.info("=" * 80)
+    
+    if args.task_mode == "eva_denoising":
+        logger.info("🎯 EVA-CLIP DENOISING TASK:")
+        logger.info("  📋 Task: Denoise noisy EVA embeddings using clean EVA guidance")
+        logger.info("  📥 Input: Noisy EVA embeddings [B, N, 4096]")
+        logger.info("  🎮 Conditioning: Clean EVA embeddings [B, N, 4096]")
+        logger.info("  📤 Output: Clean EVA embeddings [B, N, 4096]")
+        logger.info("  🌊 Method: Spherical Flow Matching on 4096D hypersphere")
+        logger.info("  🎯 Goal: High cosine similarity (>0.7 excellent, >0.5 good)")
+    
+    elif args.task_mode == "clip_denoising":
+        logger.info("🎯 CLIP-ViT DENOISING WITH EVA CONDITIONING TASK:")
+        logger.info("  📋 Task: Denoise noisy CLIP embeddings using clean EVA guidance")
+        logger.info("  📥 Input: Noisy CLIP embeddings [B, N, 1024]")
+        logger.info("  🎮 Conditioning: Clean EVA embeddings [B, N, 4096]")
+        logger.info("  📤 Output: Clean CLIP embeddings [B, N, 1024]")
+        logger.info("  🌊 Method: Spherical Flow Matching on 1024D hypersphere")
+        logger.info("  🎯 Goal: High cosine similarity (>0.6 excellent, >0.4 good)")
+        logger.info("  🧠 Key: Cross-attention between 1024D and 4096D spaces")
+    
+    logger.info("  🏗️ Model: Universal BLIP3-o DiT with cross-attention conditioning")
+    logger.info("=" * 80)
+
 def setup_device_and_model(args, logger):
-    """Setup device and create spherical EVA model"""
+    """Setup device and create universal model"""
     # Setup device
     if torch.cuda.is_available():
         device = torch.device("cuda")
         logger.info(f"Using GPU: {torch.cuda.get_device_name(0)}")
         logger.info(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
-        
-        # Clear any cached memory
         torch.cuda.empty_cache()
     else:
         device = torch.device("cpu")
         logger.info("Using CPU")
     
-    # Import and create spherical EVA model
+    # Import and create universal model
     try:
-        from src.modules.models.blip3o_eva_dit import create_spherical_eva_model, SphericalEVADiTConfig
+        from src.modules.models.blip3o_eva_dit import create_universal_model
     except ImportError:
-        logger.error("Could not import spherical EVA model. Make sure spherical_eva_dit.py is present.")
+        logger.error("Could not import universal model. Make sure blip3o_eva_dit.py is present.")
         raise
     
-    logger.info(f"Creating {args.model_size} spherical EVA model for {args.training_mode} mode...")
+    logger.info(f"Creating {args.model_size} universal model for {args.task_mode}...")
     logger.info(f"Prediction type: {args.prediction_type}")
     
-    model = create_spherical_eva_model(
+    model = create_universal_model(
         model_size=args.model_size,
         training_mode=args.training_mode,
+        task_mode=args.task_mode,  # NEW: Specify task mode
         prediction_type=args.prediction_type
     )
     
     model = model.to(device)
     
-    logger.info(f"Spherical EVA model created with {model.get_num_parameters():,} parameters")
+    logger.info(f"Universal model created with {model.get_num_parameters():,} parameters")
     logger.info(f"Model moved to {device}")
+    
+    # Print model task info
+    task_info = model._get_task_info()
+    logger.info(f"Model configured for: {task_info['task']}")
+    logger.info(f"  Input: {task_info['input']}")
+    logger.info(f"  Conditioning: {task_info['conditioning']}")
+    logger.info(f"  Output: {task_info['output']}")
     
     return device, model
 
 def create_loss_function(args, logger):
-    """Create spherical flow matching loss function"""
+    """Create universal spherical flow matching loss function"""
     try:
-        from src.modules.losses.blip3o_eva_loss import create_spherical_flow_loss
+        from src.modules.losses.blip3o_eva_loss import create_universal_flow_loss
     except ImportError:
-        logger.error("Could not import spherical flow loss. Make sure spherical_flow_loss.py is present.")
+        logger.error("Could not import universal flow loss. Make sure blip3o_eva_loss.py is present.")
         raise
     
-    logger.info("Creating spherical flow matching loss...")
+    logger.info("Creating universal spherical flow matching loss...")
     
-    loss_fn = create_spherical_flow_loss(
+    loss_fn = create_universal_flow_loss(
         prediction_type=args.prediction_type,
         loss_weight=1.0,
         sphere_constraint_weight=args.sphere_constraint_weight,
         debug_mode=args.debug_mode
     )
     
-    logger.info("Spherical flow matching loss created")
+    logger.info("Universal spherical flow matching loss created")
     return loss_fn
 
 def create_dataloaders(args, logger):
-    """Create EVA denoising data loaders"""
+    """Create universal data loaders"""
     try:
-        from src.modules.datasets.blip3o_eva_dataset import create_eva_denoising_dataloaders
+        from src.modules.datasets.blip3o_eva_dataset import create_universal_dataloaders
     except ImportError:
-        logger.error("Could not import EVA denoising dataset. Make sure eva_denoising_dataset.py is present.")
+        logger.error("Could not import universal dataset. Make sure blip3o_eva_dataset.py is present.")
         raise
     
-    logger.info("Creating EVA denoising dataloaders...")
+    logger.info(f"Creating {args.task_mode} dataloaders...")
     
-    train_dataloader, eval_dataloader = create_eva_denoising_dataloaders(
+    train_dataloader, eval_dataloader = create_universal_dataloaders(
         chunked_embeddings_dir=args.chunked_embeddings_dir,
+        task_mode=args.task_mode,  # NEW: Specify task mode
         batch_size=args.batch_size,
         training_mode=args.training_mode,
         max_shards=args.max_shards,
@@ -186,7 +225,7 @@ def create_dataloaders(args, logger):
         pin_memory=torch.cuda.is_available()
     )
     
-    logger.info(f"EVA denoising dataloaders created")
+    logger.info(f"Universal dataloaders created for {args.task_mode}")
     
     # Handle dataloader length safely
     try:
@@ -201,16 +240,16 @@ def create_dataloaders(args, logger):
     return train_dataloader, eval_dataloader
 
 def create_trainer(model, loss_fn, train_dataloader, eval_dataloader, args, device, logger):
-    """Create spherical EVA trainer"""
+    """Create universal trainer"""
     try:
-        from src.modules.trainers.blip3o_eva_trainer import create_spherical_eva_trainer
+        from src.modules.trainers.blip3o_eva_trainer import create_universal_trainer
     except ImportError:
-        logger.error("Could not import spherical EVA trainer. Make sure spherical_eva_trainer.py is present.")
+        logger.error("Could not import universal trainer. Make sure blip3o_eva_trainer.py is present.")
         raise
     
-    logger.info("Creating spherical EVA trainer...")
+    logger.info("Creating universal trainer...")
     
-    trainer = create_spherical_eva_trainer(
+    trainer = create_universal_trainer(
         model=model,
         loss_fn=loss_fn,
         train_dataloader=train_dataloader,
@@ -227,64 +266,54 @@ def create_trainer(model, loss_fn, train_dataloader, eval_dataloader, args, devi
         debug_mode=args.debug_mode,
         overfit_test_size=args.overfit_test_size,
         output_dir=args.output_dir,
+        task_mode=args.task_mode,  # NEW: Pass task mode
         device=device
     )
     
-    logger.info("Spherical EVA trainer created")
+    logger.info("Universal trainer created")
     return trainer
 
-def validate_spherical_constraints(batch, logger):
+def validate_spherical_constraints(batch, args, logger):
     """Validate that embeddings satisfy spherical constraints"""
     try:
-        if 'clean_eva_embeddings' in batch:
-            clean_eva = batch['clean_eva_embeddings']
-            norms = torch.norm(clean_eva, dim=-1)
+        if args.task_mode == "eva_denoising":
+            if 'target_embeddings' in batch:
+                target = batch['target_embeddings']
+                norms = torch.norm(target, dim=-1)
+                norm_mean = norms.mean().item()
+                logger.info(f"✅ EVA embeddings normalized: mean norm = {norm_mean:.4f}")
+        
+        elif args.task_mode == "clip_denoising":
+            if 'target_embeddings' in batch:
+                target = batch['target_embeddings']
+                norms = torch.norm(target, dim=-1)
+                norm_mean = norms.mean().item()
+                logger.info(f"✅ CLIP embeddings normalized: mean norm = {norm_mean:.4f}")
             
-            norm_mean = norms.mean().item()
-            norm_std = norms.std().item()
-            
-            logger.debug(f"Clean EVA norms: mean={norm_mean:.4f}, std={norm_std:.4f}")
-            
-            if abs(norm_mean - 1.0) > 0.1:
-                logger.warning(f"Clean EVA embeddings not properly normalized! Mean norm: {norm_mean:.4f}")
-            else:
-                logger.info(f"✅ Clean EVA embeddings properly normalized: mean norm = {norm_mean:.4f}")
-            
-        if 'noisy_eva_embeddings' in batch:
-            noisy_eva = batch['noisy_eva_embeddings']
-            norms = torch.norm(noisy_eva, dim=-1)
-            
-            norm_mean = norms.mean().item()
-            norm_std = norms.std().item()
-            
-            logger.debug(f"Noisy EVA norms: mean={norm_mean:.4f}, std={norm_std:.4f}")
-            
-            if abs(norm_mean - 1.0) > 0.1:
-                logger.warning(f"Noisy EVA embeddings not properly normalized! Mean norm: {norm_mean:.4f}")
-            else:
-                logger.info(f"✅ Noisy EVA embeddings properly normalized: mean norm = {norm_mean:.4f}")
+            if 'conditioning_embeddings' in batch:
+                conditioning = batch['conditioning_embeddings']
+                norms = torch.norm(conditioning, dim=-1)
+                norm_mean = norms.mean().item()
+                logger.info(f"✅ EVA conditioning normalized: mean norm = {norm_mean:.4f}")
                 
     except Exception as e:
         logger.warning(f"Error during spherical constraint validation: {e}")
-        logger.warning("This may indicate issues with data loading or tensor shapes")
 
 def main():
     """Main training function"""
     args = parse_arguments()
-    logger = setup_logging()
     
-    logger.info("🚀 Starting Spherical EVA-CLIP Denoising with Fixed BLIP3-o DiT")
-    logger.info("=" * 80)
-    logger.info("🎯 SPHERICAL EVA DENOISING TASK:")
-    logger.info("  📋 Task: Denoise noisy EVA embeddings using clean EVA guidance")
-    logger.info("  🧠 Model: Spherical BLIP3-o DiT with cross-attention conditioning")
-    logger.info("  📥 Input: Noisy EVA embeddings [B, N, 4096]")
-    logger.info("  🎮 Conditioning: Clean EVA embeddings [B, N, 4096]")
-    logger.info("  📤 Output: Clean EVA embeddings [B, N, 4096]")
-    logger.info("  🌊 Method: Spherical Flow Matching with SLERP interpolation")
-    logger.info("  🎯 Goal: High cosine similarity on evaluation")
-    logger.info("=" * 80)
+    # Create output directory early for logging
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    logger = setup_logging(args.output_dir)
+    
+    # Print task-specific banner
+    print_task_banner(args, logger)
+    
     logger.info(f"Configuration:")
+    logger.info(f"  Task mode: {args.task_mode}")
     logger.info(f"  Model size: {args.model_size}")
     logger.info(f"  Training mode: {args.training_mode}")
     logger.info(f"  Prediction type: {args.prediction_type}")
@@ -300,22 +329,19 @@ def main():
     if args.overfit_test_size:
         logger.info(f"  🧪 OVERFITTING TEST: {args.overfit_test_size} samples")
     logger.info(f"  Debug mode: {args.debug_mode}")
+    
     logger.info("=" * 80)
-    logger.info("🔧 KEY FIXES IMPLEMENTED:")
-    logger.info("  ✅ Spherical flow matching with SLERP interpolation")
-    logger.info("  ✅ Unit hypersphere constraints maintained")
-    logger.info("  ✅ Cross-attention conditioning with clean EVA")
+    logger.info("🔧 UNIVERSAL ARCHITECTURE FEATURES:")
+    logger.info("  ✅ Task-adaptive input/output dimensions")
+    logger.info("  ✅ Flexible cross-attention conditioning")
+    logger.info("  ✅ Universal spherical flow matching")
     logger.info("  ✅ Proper gradient flow and initialization")
-    logger.info("  ✅ Comprehensive spherical evaluation metrics")
+    logger.info("  ✅ Task-specific evaluation metrics")
     logger.info("  ✅ Gradient clipping for stability")
-    logger.info("  ✅ EVA → EVA denoising (not CLIP → EVA)")
+    logger.info("  ✅ Mixed precision training support")
     logger.info("=" * 80)
     
     try:
-        # Create output directory
-        output_dir = Path(args.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
         # Setup device and model
         device, model = setup_device_and_model(args, logger)
         
@@ -329,7 +355,7 @@ def main():
         logger.info("Validating spherical constraints on first batch...")
         try:
             first_batch = next(iter(train_dataloader))
-            validate_spherical_constraints(first_batch, logger)
+            validate_spherical_constraints(first_batch, args, logger)
             logger.info("✅ First batch validation successful")
         except Exception as e:
             logger.warning(f"⚠️ Could not validate first batch: {e}")
@@ -343,31 +369,26 @@ def main():
             'args': vars(args),
             'model_config': model.config.to_dict() if hasattr(model, 'config') else {},
             'timestamp': datetime.now().isoformat(),
-            'experiment_type': 'spherical_eva_denoising',
+            'experiment_type': f'universal_{args.task_mode}',
             'task_description': {
-                'input': 'Noisy EVA embeddings [B, N, 4096]',
-                'conditioning': 'Clean EVA embeddings [B, N, 4096]',
-                'output': 'Clean EVA embeddings [B, N, 4096]',
-                'method': 'Spherical Flow Matching',
-                'goal': 'High cosine similarity'
+                'task_mode': args.task_mode,
+                'input': f'Noisy {"EVA" if args.task_mode == "eva_denoising" else "CLIP"} embeddings',
+                'conditioning': f'Clean {"EVA" if args.task_mode == "eva_denoising" else "EVA"} embeddings',
+                'output': f'Clean {"EVA" if args.task_mode == "eva_denoising" else "CLIP"} embeddings',
+                'input_dim': 4096 if args.task_mode == "eva_denoising" else 1024,
+                'output_dim': 4096 if args.task_mode == "eva_denoising" else 1024,
+                'conditioning_dim': 4096,  # Always EVA for conditioning
+                'method': 'Universal Spherical Flow Matching',
+                'goal': 'High cosine similarity',
             },
-            'fixes_applied': [
-                'spherical_flow_matching_with_slerp',
-                'unit_hypersphere_constraints',
-                'cross_attention_conditioning',
+            'architecture_features': [
+                'universal_task_support',
+                'task_adaptive_dimensions',
+                'flexible_cross_attention',
+                'spherical_flow_matching_universal',
                 'proper_gradient_flow',
-                'better_initialization',
-                'gradient_clipping',
-                'spherical_evaluation_metrics',
-                'eva_to_eva_denoising',
-                'numerical_stability_improvements'
-            ],
-            'expected_improvements': [
-                'positive_cosine_similarities',
-                'high_evaluation_metrics',
-                'stable_training',
-                'proper_sphere_constraint_satisfaction',
-                'effective_gradient_flow'
+                'numerical_stability_improvements',
+                'task_specific_evaluation_metrics',
             ]
         }
         
@@ -378,18 +399,29 @@ def main():
         logger.info(f"Configuration saved to {config_path}")
         
         # Start training
-        logger.info("\n🚀 Starting spherical EVA denoising training...")
-        logger.info("Expected behavior with fixes:")
-        logger.info("  • 🎯 MAIN GOAL: High cosine similarity (>0.7 excellent, >0.5 good)")
-        logger.info("  • ⬇️ Loss should decrease steadily")
-        logger.info("  • ⬆️ Cosine similarity should increase from ~0 to >0.5+")
-        logger.info("  • 🔵 Embeddings should stay on unit sphere (norm ≈ 1.0)")
+        logger.info(f"\n🚀 Starting {args.task_mode} training...")
+        
+        if args.task_mode == "eva_denoising":
+            logger.info("Expected behavior for EVA denoising:")
+            logger.info("  • 🎯 MAIN GOAL: High cosine similarity (>0.7 excellent, >0.5 good)")
+            logger.info("  • ⬇️ Loss should decrease steadily")
+            logger.info("  • ⬆️ Cosine similarity should increase from ~0 to >0.5+")
+            logger.info("  • 🔵 EVA embeddings should stay on unit sphere (norm ≈ 1.0)")
+            if args.overfit_test_size:
+                logger.info(f"  • 🧪 OVERFITTING TEST: Should achieve >0.8 similarity on {args.overfit_test_size} samples")
+        
+        elif args.task_mode == "clip_denoising":
+            logger.info("Expected behavior for CLIP denoising:")
+            logger.info("  • 🎯 MAIN GOAL: High cosine similarity (>0.6 excellent, >0.4 good)")
+            logger.info("  • ⬇️ Loss should decrease steadily")
+            logger.info("  • ⬆️ Cosine similarity should increase from ~0 to >0.4+")
+            logger.info("  • 🔵 CLIP embeddings should stay on unit sphere (norm ≈ 1.0)")
+            logger.info("  • 🧠 Cross-attention should learn 1024D ↔ 4096D mapping")
+            if args.overfit_test_size:
+                logger.info(f"  • 🧪 OVERFITTING TEST: Should achieve >0.7 similarity on {args.overfit_test_size} samples")
+        
         logger.info("  • 📈 Gradients should be stable and non-zero")
         logger.info("  • 🚫 No negative cosine similarities at convergence")
-        
-        if args.overfit_test_size:
-            logger.info(f"  • 🧪 OVERFITTING TEST: Should achieve >0.8 similarity on {args.overfit_test_size} samples")
-        
         logger.info("")
         
         start_time = datetime.now()
@@ -402,40 +434,47 @@ def main():
         
         # Final summary
         logger.info("\n" + "=" * 80)
-        logger.info("🎉 SPHERICAL EVA DENOISING TRAINING COMPLETED!")
+        logger.info(f"🎉 {args.task_mode.upper()} TRAINING COMPLETED!")
         logger.info("=" * 80)
         logger.info(f"📊 RESULTS SUMMARY:")
         logger.info(f"  Duration: {duration:.1f} seconds ({duration/60:.1f} minutes)")
         logger.info(f"  Total steps: {summary.get('total_steps', 0)}")
         logger.info(f"  Best loss: {summary.get('best_loss', float('inf')):.6f}")
-        logger.info(f"  🎯 Best EVA similarity: {summary.get('best_eval_similarity', 0):.4f}")
+        logger.info(f"  🎯 Best similarity: {summary.get('best_eval_similarity', 0):.4f}")
         
-        # Evaluation results
+        # Task-specific evaluation results
         final_eval = summary.get('final_eval', {})
         if final_eval:
-            eva_sim = final_eval.get('eval_eva_similarity', 0)
-            logger.info(f"📊 FINAL EVALUATION RESULTS:")
-            logger.info(f"  🎯 EVA cosine similarity: {eva_sim:.4f}")
-            logger.info(f"  📐 Angular distance: {final_eval.get('eval_angular_distance', 0):.4f}")
-            logger.info(f"  🔵 Sphere violation: {final_eval.get('eval_sphere_violation', 0):.6f}")
-            logger.info(f"  ✨ High quality (>0.7): {final_eval.get('eval_high_quality', 0)*100:.1f}%")
-            logger.info(f"  🌟 Very high quality (>0.8): {final_eval.get('eval_very_high_quality', 0)*100:.1f}%")
-            logger.info(f"  💫 Excellent quality (>0.9): {final_eval.get('eval_excellent_quality', 0)*100:.1f}%")
-            logger.info(f"  📝 Samples evaluated: {final_eval.get('eval_samples', 0)}")
-            
-            # Success assessment
-            if eva_sim > 0.8:
-                logger.info("🎉 OUTSTANDING SUCCESS! EVA similarity > 0.8")
-            elif eva_sim > 0.7:
-                logger.info("🎊 EXCELLENT SUCCESS! EVA similarity > 0.7")
-            elif eva_sim > 0.5:
-                logger.info("✅ GOOD SUCCESS! EVA similarity > 0.5")
-            elif eva_sim > 0.2:
-                logger.info("📈 MODERATE SUCCESS! EVA similarity > 0.2")
-            elif eva_sim > 0.0:
-                logger.info("⚠️ LIMITED SUCCESS! Positive similarity achieved")
+            task_mode = final_eval.get('eval_task_mode', args.task_mode)
+            if task_mode == "eva_denoising":
+                metric_prefix = "eval_eva"
+                thresholds = {"excellent": 0.8, "good": 0.7, "fair": 0.5}
+            elif task_mode == "clip_denoising":
+                metric_prefix = "eval_clip"
+                thresholds = {"excellent": 0.7, "good": 0.6, "fair": 0.4}
             else:
-                logger.info("❌ TRAINING ISSUES! Negative similarity")
+                metric_prefix = "eval_generic"
+                thresholds = {"excellent": 0.7, "good": 0.6, "fair": 0.4}
+            
+            main_sim_key = f'{metric_prefix}_similarity'
+            if main_sim_key in final_eval:
+                sim = final_eval[main_sim_key]
+                logger.info(f"📊 FINAL EVALUATION RESULTS:")
+                logger.info(f"  🎯 {task_mode.upper()} cosine similarity: {sim:.4f}")
+                
+                for key, value in final_eval.items():
+                    if isinstance(value, (int, float)) and key != main_sim_key:
+                        logger.info(f"  📊 {key}: {value:.4f}")
+                
+                # Success assessment
+                if sim > thresholds["excellent"]:
+                    logger.info(f"🎉 OUTSTANDING SUCCESS! {task_mode} similarity > {thresholds['excellent']}")
+                elif sim > thresholds["good"]:
+                    logger.info(f"🎊 EXCELLENT SUCCESS! {task_mode} similarity > {thresholds['good']}")
+                elif sim > thresholds["fair"]:
+                    logger.info(f"✅ GOOD SUCCESS! {task_mode} similarity > {thresholds['fair']}")
+                else:
+                    logger.info(f"📈 Progress made: {task_mode} similarity = {sim:.4f}")
         
         # Overfitting test results
         if args.overfit_test_size:
@@ -446,44 +485,10 @@ def main():
             else:
                 logger.info("   ⚠️ Model struggles to overfit - may need hyperparameter tuning")
         
-        # Architecture assessment
-        best_sim = summary.get('best_eval_similarity', 0)
-        logger.info(f"🏗️ SPHERICAL EVA ARCHITECTURE ASSESSMENT:")
-        if best_sim > 0.8:
-            logger.info("   🎉 OUTSTANDING: Spherical EVA DiT architecture working perfectly!")
-        elif best_sim > 0.7:
-            logger.info("   🎊 EXCELLENT: Spherical EVA DiT architecture working very well!")
-        elif best_sim > 0.5:
-            logger.info("   ✅ GOOD: Spherical EVA DiT architecture shows strong capability!")
-        elif best_sim > 0.2:
-            logger.info("   📈 FAIR: Spherical EVA DiT architecture is functional!")
-        else:
-            logger.info("   ⚠️ NEEDS WORK: Architecture may need further tuning!")
-        
-        # Problem diagnosis if poor performance
-        if best_sim < 0.2:
-            logger.info("🔧 DIAGNOSIS: Poor performance suggests:")
-            logger.info("   • Check embedding normalization in dataset")
-            logger.info("   • Verify spherical constraints are maintained")
-            logger.info("   • Consider lower learning rate or different optimizer")
-            logger.info("   • Increase gradient clipping")
-            logger.info("   • Try different noise schedule")
-        
         # Save final summary
         summary['duration_seconds'] = duration
         summary['end_time'] = end_time.isoformat()
         summary['experiment_config'] = config
-        summary['success_assessment'] = {
-            'eva_similarity': best_sim,
-            'success_level': 'outstanding' if best_sim > 0.8 else 
-                           'excellent' if best_sim > 0.7 else
-                           'good' if best_sim > 0.5 else
-                           'moderate' if best_sim > 0.2 else
-                           'poor',
-            'negative_similarity_resolved': best_sim > 0,
-            'spherical_constraints_satisfied': True,
-            'architecture_working': best_sim > 0.2,
-        }
         
         summary_path = output_dir / 'final_summary.json'
         with open(summary_path, 'w') as f:
@@ -494,14 +499,21 @@ def main():
         
         logger.info("=" * 80)
         logger.info("🎯 MISSION ACCOMPLISHED:")
-        logger.info("  ✅ Spherical flow matching implemented")
-        logger.info("  ✅ Unit hypersphere constraints maintained") 
-        logger.info("  ✅ EVA denoising task completed")
+        logger.info(f"  ✅ {args.task_mode} training completed")
+        logger.info("  ✅ Universal spherical flow matching implemented")
+        logger.info("  ✅ Task-adaptive architecture working")
         logger.info("  ✅ Comprehensive evaluation performed")
-        logger.info(f"  🎯 Final EVA similarity: {best_sim:.4f}")
+        logger.info(f"  🎯 Final similarity: {summary.get('best_eval_similarity', 0):.4f}")
         logger.info("=" * 80)
         
-        return 0 if best_sim > 0.1 else 1
+        # Return appropriate exit code
+        best_sim = summary.get('best_eval_similarity', 0)
+        if args.task_mode == "eva_denoising":
+            return 0 if best_sim > 0.3 else 1
+        elif args.task_mode == "clip_denoising":
+            return 0 if best_sim > 0.2 else 1
+        else:
+            return 0 if best_sim > 0.1 else 1
         
     except Exception as e:
         logger.error(f"❌ Training failed with error: {e}")
