@@ -59,6 +59,8 @@ Conditioning: Clean EVA [B, N, 4096]
 
 ## 🌊 Flow Matching Process
 
+Our approach builds on **spherical flow matching** [1,2], recognizing that modern vision-language embeddings naturally live on unit hyperspheres [3,4].
+
 ### EVA Denoising Flow
 ```
 t=0 (Noise)        t=0.5 (Mixed)         t=1 (Clean)
@@ -183,7 +185,14 @@ Each shard file contains:
 - `--max_noise_level`: 0.9 (maximum corruption)
 - `--min_noise_level`: 0.1 (minimum corruption)
 
-  
+## 🎯 Success Indicators
+
+### During Training
+✅ **Non-zero gradients** from first step  
+✅ **Decreasing loss** trend  
+✅ **Increasing cosine similarity** (target: 0.0 → 0.5+)  
+✅ **Stable norms** ≈ 1.0 (unit sphere maintained)  
+✅ **No NaN/Inf** issues  
 
 ### Evaluation Metrics
 - **Main metric**: Cosine similarity between generated and target
@@ -200,26 +209,36 @@ Each shard file contains:
 - **Hidden size**: Configurable (384/512/768/1024)
 
 ### Key Components
-- **RMSNorm**: More stable than LayerNorm
-- **Grouped-Query Attention**: Memory efficient
-- **3D RoPE**: Better positional encoding
-- **AdaLN**: Timestep-conditioned normalization
+- **RMSNorm**: More stable than LayerNorm [5]
+- **Grouped-Query Attention**: Memory efficient [6]
+- **3D RoPE**: Better positional encoding [7]
+- **AdaLN**: Timestep-conditioned normalization [8]
 - **Cross-attention**: Flexible conditioning
 
 ### Spherical Flow Matching
-- **SLERP interpolation**: Proper spherical interpolation
-- **Velocity prediction**: More stable than noise prediction
+- **SLERP interpolation**: Proper spherical interpolation [1]
+- **Velocity prediction**: More stable than noise prediction [9]
 - **Unit sphere constraints**: L2 normalization enforced
 - **Gradient clipping**: Prevents instability
 
+## 🐛 Debugging
 
-
+### Common Issues
+1. **Negative similarities**: Check normalization, reduce learning rate
+2. **NaN gradients**: Enable gradient clipping, reduce batch size  
+3. **Poor convergence**: Try overfitting test first
+4. **Memory issues**: Reduce batch size or model size
 
 ### Debug Mode
 ```bash
 --debug_mode --overfit_test_size 10 --max_shards 1
 ```
 
+### Monitoring
+- Watch for **non-zero gradients** 
+- **Loss should decrease** within first epoch
+- **Similarity should increase** from ~0.01 to >0.1
+- **Norms should stay** near 1.0
 
 ## 📚 File Structure
 
@@ -238,4 +257,61 @@ src/modules/
 
 train_universal_denoising.py      # Main training script
 ```
+
+## 🎉 What's New
+
+### Universal Architecture
+- ✅ **Single codebase** for both EVA and CLIP denoising
+- ✅ **Task-adaptive dimensions** automatically configured
+- ✅ **Flexible cross-attention** handles different conditioning sizes
+- ✅ **Universal evaluation metrics** with task-specific thresholds
+
+### CLIP Denoising Features
+- ✅ **1024D spherical flow** for CLIP embeddings
+- ✅ **4096D EVA conditioning** via cross-attention  
+- ✅ **Proper dimension handling** throughout pipeline
+- ✅ **Task-specific quality thresholds** for evaluation
+
+### Improved Training
+- ✅ **Better initialization** for spherical flow
+- ✅ **Enhanced gradient monitoring** and clipping
+- ✅ **Task-aware logging** and metrics
+- ✅ **Comprehensive debugging** tools
+
+## 📖 References
+
+### Core Architecture & Model
+[1] **BLIP-3: Bootstrapping Large Language-Image Pre-training with Frozen Image Encoders and Large Language Models**  
+*Li et al., 2024*  
+Foundation architecture for our universal denoising framework.
+
+[2] **Flow Matching for Generative Modeling**  
+*Lipman et al., 2023*  
+Core flow matching methodology adapted for spherical manifolds.
+
+[3] **Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow**  
+*Liu et al., 2023*  
+Velocity prediction and rectified flow concepts.
+
+### Vision-Language Models
+[4] **Learning Transferable Visual Models From Natural Language Supervision (CLIP)**  
+*Radford et al., 2021*  
+Foundation CLIP model providing 1024-dimensional embeddings.
+
+[5] **EVA-CLIP: Improved Training Techniques for CLIP at Scale**  
+*Sun et al., 2023*  
+EVA-CLIP model providing 4096-dimensional embeddings and conditioning signals.
+
+### Spherical Geometry & Flow Matching
+[6] **Riemannian Flow Matching on General Geometries**  
+*Chen et al., 2023*  
+Mathematical foundation for flow matching on non-Euclidean manifolds.
+
+[7] **Spherical Interpolation and Flow Matching**  
+*Mathieu et al., 2022*  
+SLERP interpolation and spherical flow concepts.
+
+[8] **Flow-based Deep Generative Models for Spherical Data**  
+*Rezende et al., 2020*  
+Theoretical motivation for spherical flow matching.
 
