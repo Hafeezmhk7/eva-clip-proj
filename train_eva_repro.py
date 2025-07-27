@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """
-Universal BLIP3-o Training Script - EVA & CLIP Denoising with WandB Integration
+FIXED Universal BLIP3-o Training Script - EVA & CLIP Denoising with WandB Integration
 Supports both EVA-to-EVA and CLIP-to-CLIP (with EVA conditioning) denoising tasks
+
+FIXES:
+- Fixed string formatting issues
+- Better type checking for metrics logging
+- More robust error handling
+- Safe deque access methods
 
 Usage:
   # EVA Denoising (original task)
-  python train_universal_denoising.py --task_mode eva_denoising --chunked_embeddings_dir /path/to/embeddings --output_dir ./checkpoints_eva
+  python train_eva_repro.py --task_mode eva_denoising --chunked_embeddings_dir /path/to/embeddings --output_dir ./checkpoints_eva
 
   # CLIP Denoising with EVA Conditioning (new task)  
-  python train_universal_denoising.py --task_mode clip_denoising --chunked_embeddings_dir /path/to/embeddings --output_dir ./checkpoints_clip
+  python train_eva_repro.py --task_mode clip_denoising --chunked_embeddings_dir /path/to/embeddings --output_dir ./checkpoints_clip
 
   # With WandB logging
-  python train_universal_denoising.py --task_mode eva_denoising --use_wandb --wandb_project "blip3o-denoising" --wandb_run_name "eva-test-run"
+  python train_eva_repro.py --task_mode eva_denoising --use_wandb --wandb_project "blip3o-denoising" --wandb_run_name "eva-test-run"
 """
 
 import os
@@ -358,6 +364,23 @@ def validate_spherical_constraints(batch, args, logger):
     except Exception as e:
         logger.warning(f"Error during spherical constraint validation: {e}")
 
+def safe_format_metric(key: str, value, decimal_places: int = 4) -> str:
+    """Safely format a metric value for logging"""
+    try:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if decimal_places == 6:
+                return f"{key}: {value:.6f}"
+            else:
+                return f"{key}: {value:.4f}"
+        elif isinstance(value, str):
+            return f"{key}: {value}"
+        elif isinstance(value, bool):
+            return f"{key}: {value}"
+        else:
+            return f"{key}: {str(value)}"
+    except (ValueError, TypeError):
+        return f"{key}: {str(value)}"
+
 def main():
     """Main training function"""
     args = parse_arguments()
@@ -524,7 +547,7 @@ def main():
                 if final_eval:
                     wandb_final_eval = {}
                     for key, value in final_eval.items():
-                        if isinstance(value, (int, float)):
+                        if isinstance(value, (int, float)) and not isinstance(value, bool):
                             wandb_final_eval[f"final_eval/{key}"] = value
                     if wandb_final_eval:
                         wandb_instance.log(wandb_final_eval)
@@ -564,8 +587,9 @@ def main():
                 logger.info(f"  🎯 {task_mode.upper()} cosine similarity: {sim:.4f}")
                 
                 for key, value in final_eval.items():
-                    if isinstance(value, (int, float)) and key != main_sim_key:
-                        logger.info(f"  📊 {key}: {value:.4f}")
+                    if isinstance(value, (int, float)) and not isinstance(value, bool) and key != main_sim_key:
+                        formatted_value = safe_format_metric(key, value, decimal_places=4)
+                        logger.info(f"  📊 {formatted_value}")
                 
                 # Success assessment
                 if sim > thresholds["excellent"]:

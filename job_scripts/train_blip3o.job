@@ -253,7 +253,7 @@ echo "  • Sandwich Normalization (RMSNorm)"
 echo "  • Spherical Flow Matching with SLERP interpolation"
 echo "  • Proper gradient flow and initialization"
 echo "  • Task-specific evaluation metrics"
-if [ "$USE_WANDB" = true ]; then
+if [ "$USE_WANDB" = false ]; then
     echo "  • WandB integration for comprehensive logging"
 fi
 echo ""

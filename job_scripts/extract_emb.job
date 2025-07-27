@@ -54,7 +54,7 @@ export BLIP3O_TEMP_DIR="${BLIP3O_JOB_TEMP}"
 # --max_shards N     to limit number of shards
 # --batch_size N     to set batch size
 
-python src/modules/extract_embeddings_g.py --max_shards 1 --batch_size 128
+python src/modules/extract_embeddings_g.py --max_shards 35 --batch_size 128
 
 EXTRACTION_EXIT_CODE=$?
 if [ $EXTRACTION_EXIT_CODE -ne 0 ]; then

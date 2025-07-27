@@ -8,8 +8,8 @@
 #SBATCH --cpus-per-task=18
 #SBATCH --time=12:00:00
 #SBATCH --mem=64G
-#SBATCH --output=./slurm_out/blip3o_train_100step%j.out
-#SBATCH --error=./slurm_out/blip3o_train__100step%j.err
+#SBATCH --output=./slurm_out/clip_pred_eva_guid_1shard_%j.out
+#SBATCH --error=./slurm_out/clip_pred_eva_guid_1shard__%j.err
 
 # =============================================================================
 # FIXED BLIP3-o Training Job - Proper Implementation

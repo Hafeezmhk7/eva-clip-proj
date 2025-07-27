@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """
-Enhanced BLIP3-o Trainer - Support for Both EVA and CLIP Denoising with WandB Integration
+FIXED Enhanced BLIP3-o Trainer - Support for Both EVA and CLIP Denoising with WandB Integration
 Key features:
 1. Universal training loop for both EVA and CLIP denoising
 2. Task-specific evaluation metrics
 3. Automatic task detection and validation
 4. Comprehensive monitoring and debugging
 5. WandB logging integration for metrics visualization
+
+FIXES:
+- Fixed deque slice indexing issue
+- Fixed string formatting for non-numeric values
+- Better type checking for metrics logging
+- Safe access to deque elements
 """
 
 import torch
@@ -468,6 +474,32 @@ class UniversalDenoisingTrainer:
             'eval_task_mode': task_mode_detected or self.task_mode,
         }
 
+    def _safe_deque_slice(self, deque_obj: deque, slice_size: int = 10) -> List[float]:
+        """Safely get last N elements from deque"""
+        if len(deque_obj) == 0:
+            return []
+        
+        # Convert to list and slice
+        deque_list = list(deque_obj)
+        return deque_list[-slice_size:] if len(deque_list) >= slice_size else deque_list
+
+    def _safe_format_value(self, key: str, value: Any, decimal_places: int = 4) -> str:
+        """Safely format a value for logging, handling different types"""
+        try:
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                if decimal_places == 6:
+                    return f"{key}: {value:.6f}"
+                else:
+                    return f"{key}: {value:.4f}"
+            elif isinstance(value, str):
+                return f"{key}: {value}"
+            elif isinstance(value, bool):
+                return f"{key}: {value}"
+            else:
+                return f"{key}: {str(value)}"
+        except (ValueError, TypeError):
+            return f"{key}: {str(value)}"
+
     def _log_metrics(self, loss: float, metrics: Dict[str, float], grad_norm: float):
         """Log training metrics (task-aware) with WandB integration"""
         # Store metrics
@@ -511,7 +543,7 @@ class UniversalDenoisingTrainer:
                 
                 # Add loss function metrics
                 for key, value in metrics.items():
-                    if isinstance(value, (int, float)):
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
                         if key in ['prediction_similarity', 'eval_similarity']:
                             wandb_metrics[f'train/{key}'] = value
                         elif key == 'sphere_violation':
@@ -572,8 +604,8 @@ class UniversalDenoisingTrainer:
             if self.debug_mode:
                 logger.info(f"  Detailed metrics for {task_mode}:")
                 for key, value in metrics.items():
-                    if isinstance(value, (int, float)):
-                        logger.info(f"    {key}: {value:.6f}")
+                    formatted_value = self._safe_format_value(key, value, decimal_places=6)
+                    logger.info(f"    {formatted_value}")
 
     def _log_evaluation_metrics(self, eval_metrics: Dict[str, float]):
         """Log evaluation metrics with WandB integration"""
@@ -581,7 +613,7 @@ class UniversalDenoisingTrainer:
             try:
                 wandb_eval_metrics = {}
                 for key, value in eval_metrics.items():
-                    if isinstance(value, (int, float)):
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
                         wandb_eval_metrics[f'eval/{key}'] = value
                     elif isinstance(value, str) and key == 'eval_task_mode':
                         wandb_eval_metrics['eval/task_mode'] = value
@@ -702,10 +734,8 @@ class UniversalDenoisingTrainer:
                             
                             logger.info(f"Evaluation results for {task_mode}:")
                             for key, value in eval_metrics.items():
-                                if isinstance(value, (int, float)):
-                                    logger.info(f"  {key}: {value:.4f}")
-                                else:
-                                    logger.info(f"  {key}: {value}")
+                                formatted_value = self._safe_format_value(key, value, decimal_places=4)
+                                logger.info(f"  {formatted_value}")
                             
                             # Log evaluation metrics to WandB
                             self._log_evaluation_metrics(eval_metrics)
@@ -756,12 +786,14 @@ class UniversalDenoisingTrainer:
                     except Exception as e:
                         logger.warning(f"Failed to log epoch summary to WandB: {e}")
                 
-                # Early stopping for overfitting test
+                # Early stopping for overfitting test - FIXED slice access
                 if (self.overfit_batch is not None and 
-                    len(self.eval_similarity_history) > 0 and 
-                    max(self.eval_similarity_history[-10:]) > 0.9):
-                    logger.info("Overfitting test completed successfully!")
-                    break
+                    len(self.eval_similarity_history) > 0):
+                    # Safe access to last N elements
+                    recent_similarities = self._safe_deque_slice(self.eval_similarity_history, 10)
+                    if recent_similarities and max(recent_similarities) > 0.9:
+                        logger.info("Overfitting test completed successfully!")
+                        break
         
         except KeyboardInterrupt:
             logger.info("Training interrupted by user")
@@ -796,7 +828,7 @@ class UniversalDenoisingTrainer:
                 'overfit_test': self.overfit_batch is not None,
                 'overfit_success': (self.overfit_batch is not None and 
                                   len(self.eval_similarity_history) > 0 and 
-                                  max(self.eval_similarity_history) > 0.8),
+                                  max(self._safe_deque_slice(self.eval_similarity_history, 50)) > 0.8),
                 'loss_history': list(self.loss_history),
                 'similarity_history': list(self.similarity_history),
                 'eval_similarity_history': list(self.eval_similarity_history),
@@ -828,7 +860,8 @@ class UniversalDenoisingTrainer:
                     final_sim = final_eval[main_sim_key]
                     logger.info(f"  Final {task_mode} evaluation:")
                     for key, value in final_eval.items():
-                        logger.info(f"    {key}: {value:.4f}")
+                        formatted_value = self._safe_format_value(key, value, decimal_places=4)
+                        logger.info(f"    {formatted_value}")
                     
                     # Success assessment
                     if task_mode == "eva_denoising":

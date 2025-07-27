@@ -6,9 +6,9 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=18
 #SBATCH --time=15:00:00
-#SBATCH --mem=64G
-#SBATCH --output=./slurm_out/eva_pred_eva_guid_1shard_%j.out
-#SBATCH --error=./slurm_out/eva_pred_eva_guid_1shard_%j.err
+#SBATCH --mem=64GB
+#SBATCH --output=./slurm_out/clip_pred_eva_guid_35shard_%j.out
+#SBATCH --error=./slurm_out/clip_pred_eva_guid_35shard_%j.err
 
 # =============================================================================
 # Universal BLIP3-o Denoising Training with WandB Integration - FIXED
@@ -37,7 +37,7 @@ source activate eva_clip_env
 # =============================================================================
 
 # WandB Settings (Enable/Disable WandB logging)
-USE_WANDB=False                          # Set to false to disable WandB
+USE_WANDB=true                          # Set to false to disable WandB
 WANDB_PROJECT="eva-clip"  # WandB project name
 WANDB_API_KEY="0d9895af249ee18e4fa141e8a2350e0f4adb920f"  # Your WandB API key
 
@@ -66,8 +66,8 @@ fi
 # - "eva_denoising": Input/Output EVA [4096], Conditioning EVA [4096] (original task)
 # - "clip_denoising": Input/Output CLIP [1024], Conditioning EVA [4096] (NEW!)
 
-# TASK_MODE="clip_denoising"          # NEW: CLIP denoising with EVA conditioning
-TASK_MODE="eva_denoising"         # Original: EVA denoising
+TASK_MODE="clip_denoising"          # NEW: CLIP denoising with EVA conditioning
+# TASK_MODE="eva_denoising"         # Original: EVA denoising
 
 # =============================================================================
 # CONFIGURATION
@@ -78,37 +78,37 @@ OUTPUT_DIR="./checkpoints/universal_${TASK_MODE}_$(date +%Y%m%d_%H%M%S)"
 TRAINING_MODE="patch_only"
 MODEL_SIZE="base"
 
-# Optimized hyperparameters for universal training
-NUM_EPOCHS=10                    # Conservative epochs for initial testing
-BATCH_SIZE=64                   # Optimized batch size for stability
-LEARNING_RATE=1e-4              # Conservative learning rate for universal training
-WEIGHT_DECAY=0.01               # Standard regularization
-WARMUP_STEPS=100                # Warmup for stable training
-MAX_GRAD_NORM=1.0               # Critical for spherical flow stability
+# Optimized hyperparameters for 34 shards training
+NUM_EPOCHS=8                     # Range: [3-10] - Reduced since more data per epoch
+BATCH_SIZE=32                    # Range: [16-32] - Increased for better gradient estimates
+LEARNING_RATE=5e-5              # Range: [5e-5 to 2e-4] - Lower for stability with more data
+WEIGHT_DECAY=0.01               # Range: [0.01-0.05] - Standard regularization
+WARMUP_STEPS=500                # Range: [500-1000] - Longer warmup for larger dataset
+MAX_GRAD_NORM=1.0               # Range: [0.5-1.0] - Critical for spherical flow stability
 
 # Evaluation parameters
-EVAL_EVERY_N_STEPS=100
-EVAL_NUM_SAMPLES=500
-EVAL_INFERENCE_STEPS=50
+EVAL_EVERY_N_STEPS=500          # Range: [300-1000] - Less frequent with more data
+EVAL_NUM_SAMPLES=1000           # Range: [1000-2000] - More samples for better estimates
+EVAL_INFERENCE_STEPS=100         # Range: [30-100] - Keep standard
 
 # Testing configuration
-OVERFIT_TEST_SIZE=20            # Enable overfitting test to verify architecture
-DEBUG_MODE="--debug_mode"      # Enable debug logging
-MAX_SHARDS=1                    # Start with fewer shards for testing - REDUCED FOR DEBUGGING
+OVERFIT_TEST_SIZE=0             # Disabled for full training (set 10-50 for testing)
+DEBUG_MODE=""                   # Remove debug mode for production
+MAX_SHARDS=35                   # Using all 34 shards
 
 # Spherical flow matching parameters
-SPHERE_CONSTRAINT_WEIGHT=0.1    # Ensures unit sphere constraints
-NOISE_SCHEDULE="uniform"        # Noise sampling schedule
-MAX_NOISE_LEVEL=0.9            # Maximum corruption level
-MIN_NOISE_LEVEL=0.1            # Minimum corruption level
+SPHERE_CONSTRAINT_WEIGHT=0.1    # Range: [0.05-0.2] - Ensures unit sphere constraints
+NOISE_SCHEDULE="uniform"        # Options: "uniform" or "cosine"
+MAX_NOISE_LEVEL=0.9            # Range: [0.8-0.95] - Maximum corruption level
+MIN_NOISE_LEVEL=0.1            # Range: [0.05-0.2] - Minimum corruption level
 
 # FIXED: WandB run configuration (properly handle tags as separate arguments)
 if [ "$TASK_MODE" = "eva_denoising" ]; then
-    WANDB_RUN_NAME="eva_pred_1shard-${MODEL_SIZE}-${TIMESTAMP}"
-    WANDB_TAGS_LIST="eva_denoising ${MODEL_SIZE} ${TRAINING_MODE}"
+    WANDB_RUN_NAME="eva_pred_34shard-${MODEL_SIZE}-${TIMESTAMP}"
+    WANDB_TAGS_LIST="eva_denoising ${MODEL_SIZE} ${TRAINING_MODE} full_training"
 elif [ "$TASK_MODE" = "clip_denoising" ]; then
-    WANDB_RUN_NAME="clip_pred_1shard-${MODEL_SIZE}-${TIMESTAMP}"
-    WANDB_TAGS_LIST="clip_denoising ${MODEL_SIZE} ${TRAINING_MODE} eva_conditioning"
+    WANDB_RUN_NAME="clip_pred_34shard-${MODEL_SIZE}-${TIMESTAMP}"
+    WANDB_TAGS_LIST="clip_denoising ${MODEL_SIZE} ${TRAINING_MODE} eva_conditioning full_training"
 else
     WANDB_RUN_NAME="universal-denoising-${TIMESTAMP}"
     WANDB_TAGS_LIST="universal ${MODEL_SIZE} ${TRAINING_MODE}"
