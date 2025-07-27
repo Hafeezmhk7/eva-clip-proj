@@ -1,0 +1,75 @@
+[Rank 0] 2025-07-27 20:13:22,727 - INFO - 🚀 Multi-GPU BLIP3-o Denoising Training with DDP
+[Rank 0] 2025-07-27 20:13:22,727 - INFO - ================================================================================
+[Rank 0] 2025-07-27 20:13:22,727 - INFO - Task: clip_denoising
+[Rank 0] 2025-07-27 20:13:22,727 - INFO - World size: 3
+[Rank 0] 2025-07-27 20:13:22,727 - INFO - Device: cuda:0
+[Rank 0] 2025-07-27 20:13:22,727 - INFO - Master: gcn151:29500
+[Rank 0] 2025-07-27 20:13:22,727 - INFO - ================================================================================
+[Rank 0] 2025-07-27 20:13:31,423 - INFO - ✅ Universal denoising model loaded successfully
+[Rank 0] 2025-07-27 20:13:31,423 - INFO -   ✅ Supports: EVA denoising (4096D) & CLIP denoising (1024D)
+[Rank 0] 2025-07-27 20:13:31,427 - INFO - ✅ Universal spherical flow matching loss loaded successfully
+[Rank 0] 2025-07-27 20:13:31,427 - INFO -   ✅ Supports: Universal spherical flow for any embedding dimension
+[Rank 0] 2025-07-27 20:13:31,427 - ERROR - ❌ Universal trainer import failed: No module named 'src.modules.trainers.blip3o_eva_trainer'
+[Rank 0] 2025-07-27 20:13:31,432 - INFO - ✅ Universal denoising dataset loaded successfully
+[Rank 0] 2025-07-27 20:13:31,432 - INFO -   ✅ Supports: Flexible data loading for both EVA & CLIP tasks
+[Rank 0] 2025-07-27 20:13:31,436 - INFO - ✅ Universal configuration loaded successfully
+[Rank 0] 2025-07-27 20:13:31,436 - INFO -   ✅ Supports: Task-adaptive configs for EVA & CLIP denoising
+[Rank 0] 2025-07-27 20:13:31,436 - WARNING - ⚠️ Missing original components: ['model', 'loss', 'trainer', 'dataset', 'config']
+[Rank 0] 2025-07-27 20:13:31,436 - ERROR - ❌ Missing universal components: ['universal_trainer']
+[Rank 0] 2025-07-27 20:13:31,436 - WARNING - ⚠️ Missing backward compatibility components: ['spherical_trainer']
+[Rank 0] 2025-07-27 20:13:31,436 - ERROR - ❌ UNIVERSAL DENOISING components missing!
+[Rank 0] 2025-07-27 20:13:31,436 - ERROR -   Please ensure the following files are present:
+[Rank 0] 2025-07-27 20:13:31,436 - ERROR -     - src/modules/models/blip3o_eva_dit.py
+[Rank 0] 2025-07-27 20:13:31,436 - ERROR -     - src/modules/losses/blip3o_eva_loss.py
+[Rank 0] 2025-07-27 20:13:31,437 - ERROR -     - src/modules/trainers/blip3o_eva_trainer.py
+[Rank 0] 2025-07-27 20:13:31,437 - ERROR -     - src/modules/datasets/blip3o_eva_dataset.py
+[Rank 0] 2025-07-27 20:13:31,437 - ERROR -     - src/modules/config/blip3o_config.py
+[Rank 0] 2025-07-27 20:13:31,437 - WARNING - ⚠️ Some original BLIP3-o components failed to load. Check individual imports.
+[Rank 0] 2025-07-27 20:13:31,437 - ERROR - ❌ CRITICAL: No denoising components available!
+[Rank 0] 2025-07-27 20:13:31,437 - INFO - Creating base universal model for clip_denoising...
+[Rank 0] 2025-07-27 20:13:33,277 - INFO - Universal DiT model initialized with 207,351,808 parameters
+[Rank 0] 2025-07-27 20:13:33,277 - INFO -   Task: CLIP-ViT Denoising with EVA Conditioning
+[Rank 0] 2025-07-27 20:13:33,277 - INFO -   Input: Noisy CLIP [B, N, 1024]
+[Rank 0] 2025-07-27 20:13:33,277 - INFO -   Conditioning: Clean EVA [B, N, 4096]
+[Rank 0] 2025-07-27 20:13:33,277 - INFO -   Output: Clean CLIP [B, N, 1024]
+[Rank 0] 2025-07-27 20:13:33,277 - INFO -   Prediction type: velocity
+[Rank 0] 2025-07-27 20:13:33,836 - ERROR - Training failed: NCCL error in: /pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:2817, invalid usage (run with NCCL_DEBUG=WARN for details), NCCL version 2.26.2
+ncclInvalidUsage: This usually reflects invalid usage of NCCL library.
+Last error:
+Bootstrap : no socket interface found
+Exception raised from initNCCLComm at /pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:2817 (most recent call first):
+C++ CapturedTraceback:
+#4 std::_Function_handler<std::shared_ptr<c10::LazyValue<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > const> (), c10::SetStackTraceFetcher(std::function<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > ()>)::{lambda()#1}>::_M_invoke(std::_Any_data const&) from Logging.cpp:0
+#5 c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) from ??:0
+#6 c10::DistBackendError::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) from :0
+#7 c10d::ProcessGroupNCCL::initNCCLComm(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, c10::Device&, c10d::OpType, int, bool) [clone .cold] from ProcessGroupNCCL.cpp:0
+#8 c10d::ProcessGroupNCCL::allgather(std::vector<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::allocator<std::vector<at::Tensor, std::allocator<at::Tensor> > > >&, std::vector<at::Tensor, std::allocator<at::Tensor> >&, c10d::AllgatherOptions const&) from ??:0
+#9 c10d::ops::(anonymous namespace)::allgather_CUDA(std::vector<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::allocator<std::vector<at::Tensor, std::allocator<at::Tensor> > > > const&, c10::ArrayRef<at::Tensor>, c10::intrusive_ptr<c10d::ProcessGroup, c10::detail::intrusive_target_default_null_type<c10d::ProcessGroup> > const&, long) from Ops.cpp:0
+#10 c10::impl::make_boxed_from_unboxed_functor<c10::impl::detail::WrapFunctionIntoRuntimeFunctor_<std::tuple<std::vector<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::allocator<std::vector<at::Tensor, std::allocator<at::Tensor> > > >, c10::intrusive_ptr<c10d::Work, c10::detail::intrusive_target_default_null_type<c10d::Work> > > (*)(std::vector<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::allocator<std::vector<at::Tensor, std::allocator<at::Tensor> > > > const&, c10::ArrayRef<at::Tensor>, c10::intrusive_ptr<c10d::ProcessGroup, c10::detail::intrusive_target_default_null_type<c10d::ProcessGroup> > const&, long), std::tuple<std::vector<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::allocator<std::vector<at::Tensor, std::allocator<at::Tensor> > > >, c10::intrusive_ptr<c10d::Work, c10::detail::intrusive_target_default_null_type<c10d::Work> > >, c10::guts::typelist::typelist<std::vector<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::allocator<std::vector<at::Tensor, std::allocator<at::Tensor> > > > const&, c10::ArrayRef<at::Tensor>, c10::intrusive_ptr<c10d::ProcessGroup, c10::detail::intrusive_target_default_null_type<c10d::ProcessGroup> > const&, long> >, false>::call(c10::OperatorKernel*, c10::OperatorHandle const&, c10::DispatchKeySet, std::vector<c10::IValue, std::allocator<c10::IValue> >*) from :0
+#11 torch::autograd::basicAutogradNotImplementedFallbackImpl(c10::OperatorHandle const&, c10::DispatchKeySet, std::vector<c10::IValue, std::allocator<c10::IValue> >*) from autograd_not_implemented_fallback.cpp:0
+#12 c10::impl::BoxedKernelWrapper<std::tuple<std::vector<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::allocator<std::vector<at::Tensor, std::allocator<at::Tensor> > > >, c10::intrusive_ptr<c10d::Work, c10::detail::intrusive_target_default_null_type<c10d::Work> > > (std::vector<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::allocator<std::vector<at::Tensor, std::allocator<at::Tensor> > > > const&, c10::ArrayRef<at::Tensor>, c10::intrusive_ptr<c10d::ProcessGroup, c10::detail::intrusive_target_default_null_type<c10d::ProcessGroup> > const&, long), void>::call(c10::BoxedKernel const&, c10::OperatorHandle const&, c10::DispatchKeySet, std::vector<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::allocator<std::vector<at::Tensor, std::allocator<at::Tensor> > > > const&, c10::ArrayRef<at::Tensor>, c10::intrusive_ptr<c10d::ProcessGroup, c10::detail::intrusive_target_default_null_type<c10d::ProcessGroup> > const&, long) from :0
+#13 c10d::ProcessGroup::allgather(std::vector<std::vector<at::Tensor, std::allocator<at::Tensor> >, std::allocator<std::vector<at::Tensor, std::allocator<at::Tensor> > > >&, std::vector<at::Tensor, std::allocator<at::Tensor> >&, c10d::AllgatherOptions const&) from :0
+#14 c10d::verify_params_across_processes(c10::intrusive_ptr<c10d::ProcessGroup, c10::detail::intrusive_target_default_null_type<c10d::ProcessGroup> > const&, std::vector<at::Tensor, std::allocator<at::Tensor> > const&, std::optional<std::weak_ptr<c10d::Logger> > const&) from ??:0
+#15 std::enable_if<std::is_void<void>::value, pybind11::detail::void_type>::type pybind11::detail::argument_loader<c10::intrusive_ptr<c10d::ProcessGroup, c10::detail::intrusive_target_default_null_type<c10d::ProcessGroup> > const&, std::vector<at::Tensor, std::allocator<at::Tensor> > const&, std::optional<std::shared_ptr<c10d::Logger> > const&>::call<void, pybind11::gil_scoped_release, torch::distributed::c10d::(anonymous namespace)::c10d_init(_object*, _object*)::{lambda(c10::intrusive_ptr<c10d::ProcessGroup, c10::detail::intrusive_target_default_null_type<c10d::ProcessGroup> > const&, std::vector<at::Tensor, std::allocator<at::Tensor> > const&, std::optional<std::shared_ptr<c10d::Logger> > const&)#111}&>(torch::distributed::c10d::(anonymous namespace)::c10d_init(_object*, _object*)::{lambda(c10::intrusive_ptr<c10d::ProcessGroup, c10::detail::intrusive_target_default_null_type<c10d::ProcessGroup> > const&, std::vector<at::Tensor, std::allocator<at::Tensor> > const&, std::optional<std::shared_ptr<c10d::Logger> > const&)#111}&) && [clone .isra.0] from init.cpp:0
+#16 pybind11::cpp_function::initialize<torch::distributed::c10d::(anonymous namespace)::c10d_init(_object*, _object*)::{lambda(c10::intrusive_ptr<c10d::ProcessGroup, c10::detail::intrusive_target_default_null_type<c10d::ProcessGroup> > const&, std::vector<at::Tensor, std::allocator<at::Tensor> > const&, std::optional<std::shared_ptr<c10d::Logger> > const&)#111}, void, c10::intrusive_ptr<c10d::ProcessGroup, c10::detail::intrusive_target_default_null_type<c10d::ProcessGroup> > const&, std::vector<at::Tensor, std::allocator<at::Tensor> > const&, std::optional<std::shared_ptr<c10d::Logger> > const&, pybind11::name, pybind11::scope, pybind11::sibling, pybind11::arg, pybind11::sibling, pybind11::arg_v, pybind11::call_guard<pybind11::gil_scoped_release> >(torch::distributed::c10d::(anonymous namespace)::c10d_init(_object*, _object*)::{lambda(c10::intrusive_ptr<c10d::ProcessGroup, c10::detail::intrusive_target_default_null_type<c10d::ProcessGroup> > const&, std::vector<at::Tensor, std::allocator<at::Tensor> > const&, std::optional<std::shared_ptr<c10d::Logger> > const&)#111}&&, void (*)(c10::intrusive_ptr<c10d::ProcessGroup, c10::detail::intrusive_target_default_null_type<c10d::ProcessGroup> > const&, std::vector<at::Tensor, std::allocator<at::Tensor> > const&, std::optional<std::shared_ptr<c10d::Logger> > const&), pybind11::name const&, pybind11::scope const&, pybind11::sibling const&, pybind11::arg const&, pybind11::sibling const&, pybind11::arg_v const&, pybind11::call_guard<pybind11::gil_scoped_release> const&)::{lambda(pybind11::detail::function_call&)#3}::_FUN(pybind11::detail::function_call) from init.cpp:0
+#17 pybind11::cpp_function::dispatcher(_object*, _object*, _object*) from :0
+#18 cfunction_call from /usr/local/src/conda/python-3.11.13/Objects/methodobject.c:542
+#19 _PyObject_MakeTpCall from /usr/local/src/conda/python-3.11.13/Objects/call.c:214
+#20 _PyEval_EvalFrameDefault from /usr/local/src/conda/python-3.11.13/Python/ceval.c:4769
+#21 _PyEval_EvalFrame from /usr/local/src/conda/python-3.11.13/Include/internal/pycore_ceval.h:73
+#22 _PyObject_FastCallDictTstate from /usr/local/src/conda/python-3.11.13/Objects/call.c:152
+#23 type_call from /usr/local/src/conda/python-3.11.13/Objects/typeobject.c:1103
+#24 _PyEval_EvalFrameDefault from /usr/local/src/conda/python-3.11.13/Python/ceval.c:4769
+#25 _PyEval_EvalFrame from /usr/local/src/conda/python-3.11.13/Include/internal/pycore_ceval.h:73
+#26 PyEval_EvalCode from /usr/local/src/conda/python-3.11.13/Python/ceval.c:1148
+#27 run_eval_code_obj from /usr/local/src/conda/python-3.11.13/Python/pythonrun.c:1741
+#28 run_mod from /usr/local/src/conda/python-3.11.13/Python/pythonrun.c:1762
+#29 pyrun_file from /usr/local/src/conda/python-3.11.13/Python/pythonrun.c:1657
+#30 _PyRun_SimpleFileObject from /usr/local/src/conda/python-3.11.13/Python/pythonrun.c:440
+#31 _PyRun_AnyFileObject from /usr/local/src/conda/python-3.11.13/Python/pythonrun.c:79
+#32 pymain_run_file_obj from /usr/local/src/conda/python-3.11.13/Modules/main.c:360
+#33 Py_BytesMain from /usr/local/src/conda/python-3.11.13/Modules/main.c:738
+#34 __libc_start_call_main from ??:0
+#35 __libc_start_main_alias_2 from :0
+#36 _start from ??:0
+

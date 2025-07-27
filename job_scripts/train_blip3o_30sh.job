@@ -12,19 +12,17 @@
 #SBATCH --error=./slurm_out/blip3o_ddp_%j.err
 
 # =============================================================================
-# FIXED BLIP3-o Multi-GPU DDP Training - Updated for Latest PyTorch
+# BLIP3-o Multi-GPU DDP Training - InfiniBand Configuration
 # =============================================================================
 
-echo "🚀 BLIP3-o Multi-GPU DDP Training (FIXED)"
-echo "=========================================="
+echo "🚀 BLIP3-o Multi-GPU DDP Training with InfiniBand"
+echo "=================================================="
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node: $(hostname)"
 echo "Time: $(date)"
 echo "GPUs: ${SLURM_GPUS_ON_NODE}"
 echo "Tasks: ${SLURM_NTASKS}"
-echo "CPUs per task: ${SLURM_CPUS_PER_TASK}"
-echo "Memory: ${SLURM_MEM_PER_NODE}MB"
-echo "=========================================="
+echo "=================================================="
 
 cd $SLURM_SUBMIT_DIR
 
@@ -36,69 +34,42 @@ module load CUDA/12.6.0
 source activate eva_clip_env
 
 # =============================================================================
-# FIXED DDP/NCCL CONFIGURATION FOR SNELLIUS
+# CRITICAL: NCCL Configuration for InfiniBand
 # =============================================================================
 
-# Get master node information
+# Master node setup
 export MASTER_ADDR=$(scontrol show hostname ${SLURM_NODELIST} | head -n 1)
 export MASTER_PORT=${MASTER_PORT:-29500}
 export WORLD_SIZE=${SLURM_NTASKS}
 
-echo "DDP Configuration:"
-echo "  Master address: $MASTER_ADDR"
-echo "  Master port: $MASTER_PORT"
-echo "  World size: $WORLD_SIZE"
-echo "  Local GPUs: ${SLURM_GPUS_ON_NODE}"
-
-# FIXED: Updated NCCL Configuration for latest PyTorch
+# NCCL InfiniBand Configuration (CRITICAL!)
+export NCCL_SOCKET_IFNAME=ib0
+export NCCL_IB_DISABLE=0
 export NCCL_DEBUG=INFO
-export NCCL_DEBUG_SUBSYS=INIT,ENV
-export NCCL_IB_DISABLE=0  # Enable InfiniBand if available
-export NCCL_SOCKET_IFNAME=^lo,docker0  # Exclude loopback and docker
-export NCCL_P2P_DISABLE=0  # Enable P2P for GPUs on same node
+export NCCL_DEBUG_SUBSYS=ALL
+export NCCL_IB_HCA=mlx5_4
+export NCCL_NET_GDR_LEVEL=2
+export NCCL_P2P_LEVEL=NVL
 
-# FIXED: Use new environment variable name
-export TORCH_NCCL_ASYNC_ERROR_HANDLING=1  # Updated from NCCL_ASYNC_ERROR_HANDLING
-
-# Try to detect the correct network interface
-if ip a | grep -q ib0; then
-    export NCCL_SOCKET_IFNAME=ib0
-    echo "Using InfiniBand interface: ib0"
-elif ip a | grep -q eth0; then
-    export NCCL_SOCKET_IFNAME=eth0
-    echo "Using Ethernet interface: eth0"
-else
-    # Let NCCL auto-detect
-    unset NCCL_SOCKET_IFNAME
-    echo "Letting NCCL auto-detect network interface"
-fi
-
-# Additional NCCL optimizations
-export NCCL_TREE_THRESHOLD=0
-export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
-
-# FIXED: Additional stability settings
-export TORCH_NCCL_BLOCKING_WAIT=1
-export TORCH_NCCL_WAIT_TIMEOUT_DUMP_MILLIS=60000
-
-# =============================================================================
-# MEMORY OPTIMIZATION CONFIGURATION
-# =============================================================================
+echo "Network Configuration:"
+echo "  Using InfiniBand: ib0 (172.22.63.191)"
+echo "  Master: $MASTER_ADDR:$MASTER_PORT"
+echo "  World size: $WORLD_SIZE"
+echo "  NCCL_SOCKET_IFNAME: $NCCL_SOCKET_IFNAME"
 
 # PyTorch memory settings
 export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512,garbage_collection_threshold:0.6"
 export CUDA_LAUNCH_BLOCKING=0
 export TORCH_SHOW_CPP_STACKTRACES=1
 
-# Python settings
-export PYTHONHASHSEED=42
+# Threading
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 
 # =============================================================================
 # TRAINING CONFIGURATION
 # =============================================================================
 
-# Paths
 EMBEDDINGS_DIR="/scratch-shared/azadaianchuk1/blip3o_workspace/embeddings/patch_only_256_tokens"
 OUTPUT_DIR="./checkpoints_ddp_$(date +%Y%m%d_%H%M%S)"
 TASK_MODE="clip_denoising"
@@ -108,7 +79,7 @@ MODEL_SIZE="base"
 TRAINING_MODE="patch_only"
 PREDICTION_TYPE="velocity"
 
-# Training hyperparameters - OPTIMIZED for DDP
+# Training hyperparameters
 LEARNING_RATE=1e-4
 BATCH_SIZE=2
 GRADIENT_ACCUMULATION_STEPS=8
@@ -122,52 +93,28 @@ MAX_SHARD_CACHE=2
 SAMPLES_PER_SHARD_LOAD=500
 MAX_SHARDS=35
 
-# Spherical flow matching
-SPHERE_CONSTRAINT_WEIGHT=0.1
-NOISE_SCHEDULE="uniform"
-MAX_NOISE_LEVEL=0.9
-MIN_NOISE_LEVEL=0.1
-
-# Evaluation
-EVAL_EVERY_N_STEPS=250
-EVAL_NUM_SAMPLES=300
-EVAL_INFERENCE_STEPS=25
-
-# WandB
-USE_WANDB=false
-WANDB_PROJECT="blip3o-ddp-35shards"
-WANDB_RUN_NAME="clip_denoising_ddp_$(date +%Y%m%d_%H%M%S)"
-
-# =============================================================================
-# DIRECTORY SETUP
-# =============================================================================
-
+# Create directories
 mkdir -p "${OUTPUT_DIR}"
 mkdir -p ./slurm_out
 
-echo ""
-echo "📁 Directory Configuration:"
-echo "  Embeddings: $EMBEDDINGS_DIR"
-echo "  Output: $OUTPUT_DIR"
+# =============================================================================
+# VERIFY NETWORK BEFORE TRAINING
+# =============================================================================
 
-# Check if embeddings directory exists
-if [ ! -d "$EMBEDDINGS_DIR" ]; then
-    echo "❌ Error: Embeddings directory not found: $EMBEDDINGS_DIR"
-    echo "Available directories in /scratch-shared/azadaianchuk1/blip3o_workspace/embeddings/:"
-    ls -la /scratch-shared/azadaianchuk1/blip3o_workspace/embeddings/ || echo "Cannot list embeddings directory"
-    exit 1
-fi
+echo ""
+echo "Verifying network configuration..."
+ip addr show ib0 | grep inet
+ibstat | grep State | head -2
 
 # =============================================================================
-# TRAINING LAUNCH WITH SRUN (FIXED)
+# LAUNCH TRAINING
 # =============================================================================
 
 echo ""
 echo "🚀 Launching Multi-GPU DDP Training..."
-echo "======================================="
+echo "======================================"
 
-# FIXED: Launch with srun using the corrected script name
-srun --mpi=pmi2 python train_eva_repro_ddp.py \
+srun python train_eva_repro_ddp.py \
     --task_mode "$TASK_MODE" \
     --chunked_embeddings_dir "$EMBEDDINGS_DIR" \
     --output_dir "$OUTPUT_DIR" \
@@ -184,30 +131,20 @@ srun --mpi=pmi2 python train_eva_repro_ddp.py \
     --max_shard_cache $MAX_SHARD_CACHE \
     --samples_per_shard_load $SAMPLES_PER_SHARD_LOAD \
     --max_shards $MAX_SHARDS \
-    --sphere_constraint_weight $SPHERE_CONSTRAINT_WEIGHT \
-    --noise_schedule $NOISE_SCHEDULE \
-    --max_noise_level $MAX_NOISE_LEVEL \
-    --min_noise_level $MIN_NOISE_LEVEL \
-    --eval_every_n_steps $EVAL_EVERY_N_STEPS \
-    --eval_num_samples $EVAL_NUM_SAMPLES \
-    --eval_inference_steps $EVAL_INFERENCE_STEPS \
+    --sphere_constraint_weight 0.1 \
+    --noise_schedule uniform \
+    --max_noise_level 0.9 \
+    --min_noise_level 0.1 \
+    --eval_every_n_steps 250 \
+    --eval_num_samples 300 \
+    --eval_inference_steps 25 \
     --num_workers 2 \
     --fp16
 
 TRAINING_EXIT_CODE=$?
 
 echo ""
-echo "🏁 Job completed at $(date) with exit code $TRAINING_EXIT_CODE"
-echo "========================================"
-
-# FIXED: Print final status and cleanup info
-if [ $TRAINING_EXIT_CODE -eq 0 ]; then
-    echo "✅ Training completed successfully!"
-    echo "📁 Checkpoints saved in: $OUTPUT_DIR"
-    echo "📋 Logs available in: ./slurm_out/blip3o_ddp_${SLURM_JOB_ID}.out"
-else
-    echo "❌ Training failed with exit code: $TRAINING_EXIT_CODE"
-    echo "📋 Check logs: ./slurm_out/blip3o_ddp_${SLURM_JOB_ID}.err"
-fi
+echo "Training completed with exit code: $TRAINING_EXIT_CODE"
+echo "======================================"
 
 exit $TRAINING_EXIT_CODE
