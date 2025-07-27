@@ -1,27 +1,31 @@
 #!/bin/bash
-#SBATCH --job-name=universal_denoising_wandb
+#SBATCH --job-name=blip3o_ddp
 #SBATCH --partition=gpu_h100
 #SBATCH --nodes=1
 #SBATCH --gpus=3
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=18
-#SBATCH --time=15:00:00
-#SBATCH --mem=64GB
-#SBATCH --output=./slurm_out/clip_pred_eva_guid_35shard_%j.out
-#SBATCH --error=./slurm_out/clip_pred_eva_guid_35shard_%j.err
+#SBATCH --ntasks=3
+#SBATCH --ntasks-per-node=4
+#SBATCH --cpus-per-task=12
+#SBATCH --time=6:00:00
+#SBATCH --mem=160G
+#SBATCH --output=./slurm_out/blip3o_ddp_%j.out
+#SBATCH --error=./slurm_out/blip3o_ddp_%j.err
 
 # =============================================================================
-# Universal BLIP3-o Denoising Training with WandB Integration - FIXED
-# Supports both EVA denoising and CLIP denoising with EVA conditioning
+# BLIP3-o Multi-GPU DDP Training - Memory Optimized for Large Scale
+# Fixes OOM issues and enables training on 35+ shards with multiple GPUs
 # =============================================================================
 
-echo "🚀 Universal BLIP3-o Denoising Training with WandB"
-echo "=========================================================="
+echo "🚀 BLIP3-o Multi-GPU DDP Training"
+echo "==================================="
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node: $(hostname)"
 echo "Time: $(date)"
-echo "GPUs: $(nvidia-smi --query-gpu=name --format=csv,noheader,nounits | tr '\n' ', ')"
-echo "=========================================================="
+echo "GPUs: ${SLURM_GPUS_ON_NODE}"
+echo "Tasks: ${SLURM_NTASKS}"
+echo "CPUs per task: ${SLURM_CPUS_PER_TASK}"
+echo "Memory: ${SLURM_MEM_PER_NODE}MB"
+echo "==================================="
 
 cd $SLURM_SUBMIT_DIR
 
@@ -33,280 +37,205 @@ module load CUDA/12.6.0
 source activate eva_clip_env
 
 # =============================================================================
-# WANDB CONFIGURATION - FIXED!
+# MEMORY OPTIMIZATION CONFIGURATION
 # =============================================================================
 
-# WandB Settings (Enable/Disable WandB logging)
-USE_WANDB=true                          # Set to false to disable WandB
-WANDB_PROJECT="eva-clip"  # WandB project name
-WANDB_API_KEY="0d9895af249ee18e4fa141e8a2350e0f4adb920f"  # Your WandB API key
+# Set memory limits to prevent OOM
+export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512,garbage_collection_threshold:0.6,max_split_size_mb:32"
+export CUDA_LAUNCH_BLOCKING=0
+export TORCH_SHOW_CPP_STACKTRACES=1
 
-# Auto-generate run name based on task and timestamp
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-
-# WandB Login (only if enabled)
-if [ "$USE_WANDB" = true ]; then
-    echo "📊 Setting up WandB logging..."
-    wandb login $WANDB_API_KEY --relogin
-    if [ $? -eq 0 ]; then
-        echo "✅ WandB login successful"
-    else
-        echo "❌ WandB login failed, disabling WandB"
-        USE_WANDB=false
-    fi
-else
-    echo "📊 WandB logging disabled"
-fi
+# Optimize Python memory usage
+export PYTHONHASHSEED=42
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+export MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 
 # =============================================================================
-# TASK CONFIGURATION - Choose your task mode
+# DDP CONFIGURATION
 # =============================================================================
 
-# TASK_MODE options:
-# - "eva_denoising": Input/Output EVA [4096], Conditioning EVA [4096] (original task)
-# - "clip_denoising": Input/Output CLIP [1024], Conditioning EVA [4096] (NEW!)
+# DDP environment variables
+export MASTER_ADDR=$(scontrol show hostname ${SLURM_NODELIST} | head -n 1)
+export MASTER_PORT=12355
+export WORLD_SIZE=${SLURM_NTASKS}
+export NCCL_DEBUG=INFO
+export NCCL_TREE_THRESHOLD=0
 
-TASK_MODE="clip_denoising"          # NEW: CLIP denoising with EVA conditioning
-# TASK_MODE="eva_denoising"         # Original: EVA denoising
+# Optimize NCCL for H100
+export NCCL_IB_DISABLE=1
+export NCCL_SOCKET_IFNAME=ib0
+export NCCL_NET_GDR_LEVEL=2
+
+echo "DDP Configuration:"
+echo "  Master address: $MASTER_ADDR"
+echo "  Master port: $MASTER_PORT"
+echo "  World size: $WORLD_SIZE"
+echo "  GPUs per node: ${SLURM_GPUS_ON_NODE}"
 
 # =============================================================================
-# CONFIGURATION
+# TRAINING CONFIGURATION - MEMORY OPTIMIZED
 # =============================================================================
 
+# Paths
 EMBEDDINGS_DIR="/scratch-shared/azadaianchuk1/blip3o_workspace/embeddings/patch_only_256_tokens"
-OUTPUT_DIR="./checkpoints/universal_${TASK_MODE}_$(date +%Y%m%d_%H%M%S)"
+OUTPUT_DIR="./checkpoints_ddp_$(date +%Y%m%d_%H%M%S)"
+TASK_MODE="clip_denoising"  # or "eva_denoising"
+
+# Model configuration - optimized for memory
+MODEL_SIZE="base"  # Reduced from large to base for memory
 TRAINING_MODE="patch_only"
-MODEL_SIZE="base"
+PREDICTION_TYPE="velocity"
 
-# Optimized hyperparameters for 34 shards training
-NUM_EPOCHS=8                     # Range: [3-10] - Reduced since more data per epoch
-BATCH_SIZE=32                    # Range: [16-32] - Increased for better gradient estimates
-LEARNING_RATE=5e-5              # Range: [5e-5 to 2e-4] - Lower for stability with more data
-WEIGHT_DECAY=0.01               # Range: [0.01-0.05] - Standard regularization
-WARMUP_STEPS=500                # Range: [500-1000] - Longer warmup for larger dataset
-MAX_GRAD_NORM=1.0               # Range: [0.5-1.0] - Critical for spherical flow stability
+# Training hyperparameters - MEMORY OPTIMIZED
+LEARNING_RATE=1e-4
+BATCH_SIZE=2  # Small per-GPU batch size
+GRADIENT_ACCUMULATION_STEPS=8  # Large accumulation for effective batch size
+NUM_EPOCHS=5
+WARMUP_STEPS=100
+WEIGHT_DECAY=0.01
+MAX_GRAD_NORM=1.0
 
-# Evaluation parameters
-EVAL_EVERY_N_STEPS=500          # Range: [300-1000] - Less frequent with more data
-EVAL_NUM_SAMPLES=1000           # Range: [1000-2000] - More samples for better estimates
-EVAL_INFERENCE_STEPS=100         # Range: [30-100] - Keep standard
+# Memory optimization parameters - NEW!
+MAX_SHARD_CACHE=2  # Reduced cache size
+SAMPLES_PER_SHARD_LOAD=500  # Smaller chunks
+MAX_SHARDS=35  # Full dataset
 
-# Testing configuration
-OVERFIT_TEST_SIZE=0             # Disabled for full training (set 10-50 for testing)
-DEBUG_MODE=""                   # Remove debug mode for production
-MAX_SHARDS=35                   # Using all 34 shards
+# Spherical flow matching
+SPHERE_CONSTRAINT_WEIGHT=0.1
+NOISE_SCHEDULE="uniform"
+MAX_NOISE_LEVEL=0.9
+MIN_NOISE_LEVEL=0.1
 
-# Spherical flow matching parameters
-SPHERE_CONSTRAINT_WEIGHT=0.1    # Range: [0.05-0.2] - Ensures unit sphere constraints
-NOISE_SCHEDULE="uniform"        # Options: "uniform" or "cosine"
-MAX_NOISE_LEVEL=0.9            # Range: [0.8-0.95] - Maximum corruption level
-MIN_NOISE_LEVEL=0.1            # Range: [0.05-0.2] - Minimum corruption level
+# Evaluation - optimized for memory
+EVAL_EVERY_N_STEPS=250
+EVAL_NUM_SAMPLES=300
+EVAL_INFERENCE_STEPS=25
 
-# FIXED: WandB run configuration (properly handle tags as separate arguments)
-if [ "$TASK_MODE" = "eva_denoising" ]; then
-    WANDB_RUN_NAME="eva_pred_34shard-${MODEL_SIZE}-${TIMESTAMP}"
-    WANDB_TAGS_LIST="eva_denoising ${MODEL_SIZE} ${TRAINING_MODE} full_training"
-elif [ "$TASK_MODE" = "clip_denoising" ]; then
-    WANDB_RUN_NAME="clip_pred_34shard-${MODEL_SIZE}-${TIMESTAMP}"
-    WANDB_TAGS_LIST="clip_denoising ${MODEL_SIZE} ${TRAINING_MODE} eva_conditioning full_training"
-else
-    WANDB_RUN_NAME="universal-denoising-${TIMESTAMP}"
-    WANDB_TAGS_LIST="universal ${MODEL_SIZE} ${TRAINING_MODE}"
+# Debugging
+DEBUG_MODE=""
+OVERFIT_TEST_SIZE=""  # Disabled for full training
+
+# WandB configuration
+USE_WANDB=false
+WANDB_PROJECT="blip3o-ddp-35shards"
+WANDB_RUN_NAME="clip_denoising_ddp_35shards_$(date +%Y%m%d_%H%M%S)"
+
+# Build WandB args
+WANDB_ARGS=""
+if [ "$USE_WANDB" = true ]; then
+    WANDB_ARGS="--use_wandb --wandb_project $WANDB_PROJECT --wandb_run_name $WANDB_RUN_NAME --wandb_tags ddp multi_gpu memory_optimized 35_shards $TASK_MODE"
 fi
+
+# =============================================================================
+# MEMORY AND SYSTEM MONITORING
+# =============================================================================
+
+echo "📊 Pre-training System Status:"
+echo "CPU Usage: $(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | awk -F'%' '{print $1}')"
+echo "Memory Usage: $(free -h | awk '/^Mem:/ {print $3 "/" $2}')"
+echo "GPU Status:"
+nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits
+
+# Function to monitor memory during training
+monitor_memory() {
+    while true; do
+        sleep 300  # Check every 5 minutes
+        echo "$(date): Memory check - $(free -h | awk '/^Mem:/ {print $3 "/" $2}')"
+        nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits | awk '{print "GPU Memory: " $1 "/" $2 " MB"}'
+    done
+}
+
+# Start background memory monitoring
+monitor_memory &
+MONITOR_PID=$!
+
+# =============================================================================
+# DIRECTORY SETUP
+# =============================================================================
 
 # Create output directory
 mkdir -p "${OUTPUT_DIR}"
 mkdir -p ./slurm_out
 
 echo ""
-echo "⚙️ Universal Denoising Configuration:"
-echo "========================================"
+echo "📁 Directory Configuration:"
+echo "  Embeddings: $EMBEDDINGS_DIR"
+echo "  Output: $OUTPUT_DIR"
+echo "  Logs: ./slurm_out/"
 
-if [ "$TASK_MODE" = "eva_denoising" ]; then
-    echo "🎯 TASK: EVA-CLIP Denoising"
-    echo "  📥 Input: Noisy EVA embeddings [B, N, 4096]"
-    echo "  🎮 Conditioning: Clean EVA embeddings [B, N, 4096]"
-    echo "  📤 Output: Clean EVA embeddings [B, N, 4096]"
-    echo "  🌊 Method: Spherical Flow Matching on 4096D hypersphere"
-    echo "  🎯 Target: Cosine similarity >0.7 (excellent), >0.5 (good)"
-elif [ "$TASK_MODE" = "clip_denoising" ]; then
-    echo "🎯 TASK: CLIP-ViT Denoising with EVA Conditioning"
-    echo "  📥 Input: Noisy CLIP embeddings [B, N, 1024]"
-    echo "  🎮 Conditioning: Clean EVA embeddings [B, N, 4096]"
-    echo "  📤 Output: Clean CLIP embeddings [B, N, 1024]"
-    echo "  🌊 Method: Spherical Flow Matching on 1024D hypersphere"
-    echo "  🧠 Architecture: Cross-attention between 1024D and 4096D spaces"
-    echo "  🎯 Target: Cosine similarity >0.6 (excellent), >0.4 (good)"
-else
-    echo "❌ Unknown task mode: $TASK_MODE"
-    exit 1
-fi
-
-echo ""
-echo "🏗️ Model: Universal BLIP3-o DiT with task-adaptive dimensions"
-echo "Embeddings: $EMBEDDINGS_DIR"
-echo "Output: $OUTPUT_DIR"
-echo "Training mode: $TRAINING_MODE"
-echo "Model size: $MODEL_SIZE"
-echo "Max shards: $MAX_SHARDS"
-echo ""
-echo "📊 WandB Configuration:"
-if [ "$USE_WANDB" = true ]; then
-    echo "  Enabled: ✅ YES"
-    echo "  Project: $WANDB_PROJECT"
-    echo "  Run name: $WANDB_RUN_NAME"
-    echo "  Tags: $WANDB_TAGS_LIST"
-else
-    echo "  Enabled: ❌ NO"
-fi
-echo ""
-echo "📊 Training Hyperparameters:"
-echo "  Task mode: $TASK_MODE"
-echo "  Epochs: $NUM_EPOCHS"
-echo "  Batch size: $BATCH_SIZE"
-echo "  Learning rate: $LEARNING_RATE"
-echo "  Weight decay: $WEIGHT_DECAY"
-echo "  Warmup steps: $WARMUP_STEPS"
-echo "  Max grad norm: $MAX_GRAD_NORM"
-echo "  Overfitting test: $OVERFIT_TEST_SIZE samples"
-echo ""
-echo "🌊 Spherical Flow Parameters:"
-echo "  Sphere constraint weight: $SPHERE_CONSTRAINT_WEIGHT"
-echo "  Noise schedule: $NOISE_SCHEDULE"
-echo "  Noise range: [$MIN_NOISE_LEVEL, $MAX_NOISE_LEVEL]"
-echo ""
-echo "🔍 Evaluation Configuration:"
-echo "  Eval every: $EVAL_EVERY_N_STEPS steps"
-echo "  Eval samples: $EVAL_NUM_SAMPLES"
-echo "  Inference steps: $EVAL_INFERENCE_STEPS"
-echo ""
-
-# Verify embeddings exist
+# Verify embeddings directory
 if [ ! -d "$EMBEDDINGS_DIR" ]; then
     echo "❌ Embeddings directory not found: $EMBEDDINGS_DIR"
-    echo "Available embeddings:"
-    ls -la "/scratch-shared/azadaianchuk1/blip3o_workspace/embeddings/" 2>/dev/null || echo "No embeddings found"
     exit 1
 fi
 
-echo "✅ Embeddings verified: $EMBEDDINGS_DIR"
-
-# Check available shards
+# Count available shards
 SHARD_COUNT=$(find "$EMBEDDINGS_DIR" -name "*.pkl" | wc -l)
-echo "✅ Found $SHARD_COUNT embedding shards"
-
-if [ $SHARD_COUNT -eq 0 ]; then
-    echo "❌ No embedding shards found!"
-    exit 1
-fi
+echo "  Available shards: $SHARD_COUNT"
 
 if [ $SHARD_COUNT -lt $MAX_SHARDS ]; then
-    echo "⚠️ Only $SHARD_COUNT shards available (requested $MAX_SHARDS)"
+    echo "⚠️  Warning: Requested $MAX_SHARDS shards but only $SHARD_COUNT available"
     MAX_SHARDS=$SHARD_COUNT
-    echo "   Adjusted to use $MAX_SHARDS shards"
 fi
 
-# Verify universal training script exists
-if [ ! -f "train_eva_repro.py" ]; then
-    echo "❌ Universal training script not found: train_eva_repro.py"
-    echo "Available Python files:"
-    ls -la *.py 2>/dev/null || echo "No Python files found"
-    exit 1
-fi
+# =============================================================================
+# EFFECTIVE BATCH SIZE CALCULATION
+# =============================================================================
 
-echo "✅ Universal training script found"
+EFFECTIVE_BATCH_SIZE=$((BATCH_SIZE * WORLD_SIZE * GRADIENT_ACCUMULATION_STEPS))
 
 echo ""
-echo "🚀 Starting Universal Denoising Training..."
-echo "=============================================="
+echo "🔢 Batch Size Configuration:"
+echo "  Batch size per GPU: $BATCH_SIZE"
+echo "  Number of GPUs: $WORLD_SIZE"
+echo "  Gradient accumulation: $GRADIENT_ACCUMULATION_STEPS"
+echo "  Effective batch size: $EFFECTIVE_BATCH_SIZE"
+echo "  Memory per batch (est.): $((BATCH_SIZE * 256 * 1024 * 4 / 1024 / 1024))MB per GPU (CLIP)"
 
-if [ "$TASK_MODE" = "eva_denoising" ]; then
-    echo "🧪 EXPECTED BEHAVIOR FOR EVA DENOISING:"
-    echo "  ✅ Non-zero gradients from first step"
-    echo "  ✅ Decreasing loss within first few epochs"
-    echo "  ✅ Cosine similarity increasing from ~0.01 to >0.5"
-    echo "  ✅ EVA embeddings stay on unit sphere (norm ≈ 1.0)"
-    echo "  ✅ Final similarity >0.5 (good), >0.7 (excellent)"
-    echo "  ✅ Overfitting test should achieve >0.8 similarity"
-elif [ "$TASK_MODE" = "clip_denoising" ]; then
-    echo "🧪 EXPECTED BEHAVIOR FOR CLIP DENOISING:"
-    echo "  ✅ Non-zero gradients from first step"
-    echo "  ✅ Decreasing loss within first few epochs"
-    echo "  ✅ Cosine similarity increasing from ~0.01 to >0.4"
-    echo "  ✅ CLIP embeddings stay on unit sphere (norm ≈ 1.0)"
-    echo "  ✅ Cross-attention learns 1024D ↔ 4096D mapping"
-    echo "  ✅ Final similarity >0.4 (good), >0.6 (excellent)"
-    echo "  ✅ Overfitting test should achieve >0.7 similarity"
-fi
+# =============================================================================
+# TRAINING LAUNCH
+# =============================================================================
 
-echo "  ✅ No NaN/Inf issues or tensor shape mismatches"
-echo "  ✅ Stable gradient norms and learning rate scheduling"
+echo ""
+echo "🚀 Launching Multi-GPU DDP Training..."
+echo "======================================="
+echo "Task: $TASK_MODE"
+echo "Model: $MODEL_SIZE"
+echo "Shards: $MAX_SHARDS"
+echo "Memory optimization: Enabled"
+echo "Cache size: $MAX_SHARD_CACHE shards"
+echo "Samples per load: $SAMPLES_PER_SHARD_LOAD"
+
 if [ "$USE_WANDB" = true ]; then
-    echo "  📊 All metrics logged to WandB for visualization"
-fi
-echo ""
-echo "🏗️ UNIVERSAL ARCHITECTURE FEATURES:"
-echo "  • Task-adaptive input/output dimensions"
-echo "  • Flexible cross-attention conditioning"
-echo "  • Universal BLIP3-o DiT with 3D RoPE and Grouped-Query Attention"
-echo "  • Sandwich Normalization (RMSNorm)"
-echo "  • Spherical Flow Matching with SLERP interpolation"
-echo "  • Proper gradient flow and initialization"
-echo "  • Task-specific evaluation metrics"
-if [ "$USE_WANDB" = true ]; then
-    echo "  • WandB integration for comprehensive logging"
+    echo "WandB: $WANDB_PROJECT/$WANDB_RUN_NAME"
 fi
 echo ""
 
-# FIXED: Prepare WandB arguments (properly handle space-separated tags)
-WANDB_ARGS=""
-if [ "$USE_WANDB" = true ]; then
-    WANDB_ARGS="--use_wandb --wandb_project $WANDB_PROJECT --wandb_run_name $WANDB_RUN_NAME --wandb_tags $WANDB_TAGS_LIST"
-    echo "📊 WandB arguments: $WANDB_ARGS"
-    echo ""
-fi
+# Export all configuration for the training script
+export TASK_MODE EMBEDDINGS_DIR OUTPUT_DIR MODEL_SIZE TRAINING_MODE PREDICTION_TYPE
+export LEARNING_RATE BATCH_SIZE GRADIENT_ACCUMULATION_STEPS NUM_EPOCHS WARMUP_STEPS
+export WEIGHT_DECAY MAX_GRAD_NORM MAX_SHARD_CACHE SAMPLES_PER_SHARD_LOAD MAX_SHARDS
+export SPHERE_CONSTRAINT_WEIGHT NOISE_SCHEDULE MAX_NOISE_LEVEL MIN_NOISE_LEVEL
+export EVAL_EVERY_N_STEPS EVAL_NUM_SAMPLES EVAL_INFERENCE_STEPS
 
-# DEBUGGING: Show exact command that will be run
-echo "🔍 DEBUGGING: Full command to be executed:"
-echo "python train_eva_repro.py \\"
-echo "    --task_mode \"$TASK_MODE\" \\"
-echo "    --chunked_embeddings_dir \"$EMBEDDINGS_DIR\" \\"
-echo "    --output_dir \"$OUTPUT_DIR\" \\"
-echo "    --model_size \"$MODEL_SIZE\" \\"
-echo "    --training_mode \"$TRAINING_MODE\" \\"
-echo "    --learning_rate $LEARNING_RATE \\"
-echo "    --batch_size $BATCH_SIZE \\"
-echo "    --num_epochs $NUM_EPOCHS \\"
-echo "    --warmup_steps $WARMUP_STEPS \\"
-echo "    --weight_decay $WEIGHT_DECAY \\"
-echo "    --max_grad_norm $MAX_GRAD_NORM \\"
-echo "    --sphere_constraint_weight $SPHERE_CONSTRAINT_WEIGHT \\"
-echo "    --noise_schedule $NOISE_SCHEDULE \\"
-echo "    --max_noise_level $MAX_NOISE_LEVEL \\"
-echo "    --min_noise_level $MIN_NOISE_LEVEL \\"
-echo "    --eval_every_n_steps $EVAL_EVERY_N_STEPS \\"
-echo "    --eval_num_samples $EVAL_NUM_SAMPLES \\"
-echo "    --eval_inference_steps $EVAL_INFERENCE_STEPS \\"
-echo "    --overfit_test_size $OVERFIT_TEST_SIZE \\"
-echo "    --max_shards $MAX_SHARDS \\"
-echo "    --fp16 \\"
-echo "    $DEBUG_MODE \\"
-echo "    $WANDB_ARGS"
-echo ""
-
-# Launch universal denoising training with WandB integration
-python train_eva_repro.py \
+# Launch training with srun for proper DDP setup
+srun python train_eva_repro_ddp.py \
     --task_mode "$TASK_MODE" \
     --chunked_embeddings_dir "$EMBEDDINGS_DIR" \
     --output_dir "$OUTPUT_DIR" \
     --model_size "$MODEL_SIZE" \
     --training_mode "$TRAINING_MODE" \
+    --prediction_type "$PREDICTION_TYPE" \
     --learning_rate $LEARNING_RATE \
     --batch_size $BATCH_SIZE \
+    --gradient_accumulation_steps $GRADIENT_ACCUMULATION_STEPS \
     --num_epochs $NUM_EPOCHS \
     --warmup_steps $WARMUP_STEPS \
     --weight_decay $WEIGHT_DECAY \
     --max_grad_norm $MAX_GRAD_NORM \
+    --max_shard_cache $MAX_SHARD_CACHE \
+    --samples_per_shard_load $SAMPLES_PER_SHARD_LOAD \
+    --max_shards $MAX_SHARDS \
     --sphere_constraint_weight $SPHERE_CONSTRAINT_WEIGHT \
     --noise_schedule $NOISE_SCHEDULE \
     --max_noise_level $MAX_NOISE_LEVEL \
@@ -314,264 +243,179 @@ python train_eva_repro.py \
     --eval_every_n_steps $EVAL_EVERY_N_STEPS \
     --eval_num_samples $EVAL_NUM_SAMPLES \
     --eval_inference_steps $EVAL_INFERENCE_STEPS \
-    --overfit_test_size $OVERFIT_TEST_SIZE \
-    --max_shards $MAX_SHARDS \
+    --num_workers 2 \
     --fp16 \
     $DEBUG_MODE \
     $WANDB_ARGS
 
 TRAINING_EXIT_CODE=$?
 
+# Stop memory monitoring
+kill $MONITOR_PID 2>/dev/null
+
+# =============================================================================
+# POST-TRAINING ANALYSIS
+# =============================================================================
+
 echo ""
 echo "========================================"
-echo "📊 Universal Denoising Results"
+echo "📊 Training Results Analysis"
 echo "========================================"
 
 if [ $TRAINING_EXIT_CODE -eq 0 ]; then
-    echo "✅ Universal denoising training completed successfully!"
+    echo "✅ Multi-GPU DDP training completed successfully!"
     
-    echo ""
-    echo "📋 Training Summary:"
-    echo "==================="
-    
-    # Check for training results
-    SUMMARY_FILE="$OUTPUT_DIR/training_summary.json"
-    CONFIG_FILE="$OUTPUT_DIR/experiment_config.json"
-    FINAL_SUMMARY_FILE="$OUTPUT_DIR/final_summary.json"
-    
-    if [ -f "$FINAL_SUMMARY_FILE" ]; then
+    # Analyze results
+    if [ -f "${OUTPUT_DIR}/ddp_training_summary.json" ]; then
         echo ""
-        echo "📊 Training Results:"
-        echo "==================="
+        echo "📋 Training Summary:"
+        echo "=================="
         
-        # Extract key metrics using Python
         python -c "
 import json
 import sys
 try:
-    with open('$FINAL_SUMMARY_FILE', 'r') as f:
-        data = json.load(f)
+    with open('${OUTPUT_DIR}/ddp_training_summary.json', 'r') as f:
+        summary = json.load(f)
     
-    print(f'🎯 Task Mode: {data.get(\"task_mode\", \"unknown\")}')
-    print(f'🎯 Best Loss: {data.get(\"best_loss\", float(\"inf\")):.6f}')
-    print(f'🎯 Best Similarity: {data.get(\"best_eval_similarity\", 0):.4f}')
-    print(f'📊 Total Steps: {data.get(\"total_steps\", 0):,}')
-    print(f'⏱️ Training Time: {data.get(\"duration_seconds\", 0):.1f} seconds')
+    print(f'🎯 Task: {summary.get(\"task_mode\", \"unknown\")}')
+    print(f'⏱️  Duration: {summary.get(\"total_time_seconds\", 0):.1f} seconds')
+    print(f'📊 Steps: {summary.get(\"total_steps\", 0):,}')
+    print(f'📈 Best Loss: {summary.get(\"best_loss\", 0):.6f}')
+    print(f'🎯 Best Similarity: {summary.get(\"best_eval_similarity\", 0):.4f}')
     
-    # WandB URL if available
-    wandb_url = data.get('wandb_url')
+    # DDP info
+    ddp_info = summary.get('ddp_info', {})
+    print(f'🔢 World Size: {ddp_info.get(\"world_size\", 1)}')
+    print(f'📦 Effective Batch Size: {ddp_info.get(\"effective_batch_size\", \"unknown\")}')
+    
+    # Memory stats
+    memory_stats = summary.get('memory_stats', {})
+    print(f'💾 Peak Memory: {memory_stats.get(\"peak_memory_gb\", 0):.1f} GB')
+    print(f'💾 Final Memory: {memory_stats.get(\"final_memory_gb\", 0):.1f} GB')
+    
+    # Final evaluation
+    final_eval = summary.get('final_eval', {})
+    if final_eval:
+        task_mode = final_eval.get('eval_task_mode', summary.get('task_mode', 'unknown'))
+        if task_mode == 'eva_denoising':
+            sim_key = 'eval_eva_similarity'
+        elif task_mode == 'clip_denoising':
+            sim_key = 'eval_clip_similarity'
+        else:
+            sim_key = 'eval_generic_similarity'
+        
+        if sim_key in final_eval:
+            final_sim = final_eval[sim_key]
+            print(f'🏆 Final Evaluation Similarity: {final_sim:.4f}')
+            
+            # Success assessment
+            if task_mode == 'eva_denoising':
+                if final_sim > 0.8:
+                    print('🎉 OUTSTANDING: EVA similarity > 0.8!')
+                elif final_sim > 0.7:
+                    print('🎊 EXCELLENT: EVA similarity > 0.7!')
+                elif final_sim > 0.5:
+                    print('✅ GOOD: EVA similarity > 0.5!')
+                else:
+                    print(f'📈 Progress: EVA similarity = {final_sim:.4f}')
+            elif task_mode == 'clip_denoising':
+                if final_sim > 0.7:
+                    print('🎉 OUTSTANDING: CLIP similarity > 0.7!')
+                elif final_sim > 0.6:
+                    print('🎊 EXCELLENT: CLIP similarity > 0.6!')
+                elif final_sim > 0.4:
+                    print('✅ GOOD: CLIP similarity > 0.4!')
+                else:
+                    print(f'📈 Progress: CLIP similarity = {final_sim:.4f}')
+                    
+            # Quality breakdown
+            high_quality = final_eval.get(f'{sim_key.replace(\"similarity\", \"high_quality\")}', 0)
+            very_high_quality = final_eval.get(f'{sim_key.replace(\"similarity\", \"very_high_quality\")}', 0)
+            excellent_quality = final_eval.get(f'{sim_key.replace(\"similarity\", \"excellent_quality\")}', 0)
+            
+            print(f'📊 Quality Distribution:')
+            print(f'   High Quality (>0.6/0.7): {high_quality*100:.1f}%')
+            print(f'   Very High Quality (>0.7/0.8): {very_high_quality*100:.1f}%')
+            print(f'   Excellent Quality (>0.8/0.9): {excellent_quality*100:.1f}%')
+    
+    # WandB link
+    wandb_url = summary.get('wandb_url')
     if wandb_url:
         print(f'📊 WandB Dashboard: {wandb_url}')
-    
-    # Task-specific assessment
-    task_mode = data.get('task_mode', 'unknown')
-    best_sim = data.get('best_eval_similarity', 0)
-    
-    if task_mode == 'eva_denoising':
-        if best_sim > 0.7:
-            print(f'🎉 OUTSTANDING: EVA denoising similarity > 0.7!')
-        elif best_sim > 0.5:
-            print(f'✅ GOOD: EVA denoising similarity > 0.5!')
-        elif best_sim > 0.2:
-            print(f'📈 FAIR: EVA denoising shows learning!')
-        else:
-            print(f'⚠️  NEEDS WORK: EVA similarity = {best_sim:.4f}')
-    elif task_mode == 'clip_denoising':
-        if best_sim > 0.6:
-            print(f'🎉 OUTSTANDING: CLIP denoising similarity > 0.6!')
-        elif best_sim > 0.4:
-            print(f'✅ GOOD: CLIP denoising similarity > 0.4!')
-        elif best_sim > 0.15:
-            print(f'📈 FAIR: CLIP denoising shows learning!')
-        else:
-            print(f'⚠️  NEEDS WORK: CLIP similarity = {best_sim:.4f}')
-    
-    # Overfitting test results
-    if data.get('overfit_test', False):
-        overfit_success = data.get('overfit_success', False)
-        print(f'🧪 Overfitting Test: {\"✅ PASSED\" if overfit_success else \"❌ FAILED\"}')
-        if overfit_success:
-            print(f'   ✅ Architecture can learn - implementation is correct!')
-        else:
-            print(f'   ⚠️  Architecture struggles to overfit - check implementation')
-    
-    # Final evaluation details
-    final_eval = data.get('final_eval', {})
-    if final_eval:
-        print(f'')
-        print(f'🔍 Final Evaluation:')
         
-        # Determine metric prefix based on task
-        if task_mode == 'eva_denoising':
-            metric_prefix = 'eval_eva'
-        elif task_mode == 'clip_denoising':
-            metric_prefix = 'eval_clip'
-        else:
-            metric_prefix = 'eval_generic'
-        
-        main_sim_key = f'{metric_prefix}_similarity'
-        if main_sim_key in final_eval:
-            final_sim = final_eval[main_sim_key]
-            print(f'   Overall Similarity: {final_sim:.4f}')
-            
-            high_qual_key = f'{metric_prefix}_high_quality'
-            very_high_qual_key = f'{metric_prefix}_very_high_quality'
-            
-            if high_qual_key in final_eval:
-                high_qual = final_eval[high_qual_key] * 100
-                print(f'   High Quality: {high_qual:.1f}%')
-            
-            if very_high_qual_key in final_eval:
-                very_high_qual = final_eval[very_high_qual_key] * 100
-                print(f'   Very High Quality: {very_high_qual:.1f}%')
-            
-            samples_key = f'{metric_prefix}_samples'
-            if samples_key in final_eval:
-                samples = final_eval[samples_key]
-                print(f'   Samples Evaluated: {samples:,}')
-    
 except Exception as e:
-    print(f'Could not parse final summary: {e}')
-    # Try to show any available checkpoints
-    import os
-    try:
-        checkpoints = [f for f in os.listdir('$OUTPUT_DIR') if f.endswith('.pt')]
-        if checkpoints:
-            print(f'Found {len(checkpoints)} checkpoint files')
-            print(f'Latest: {max(checkpoints)}')
-    except:
-        pass
+    print(f'Could not parse training summary: {e}')
     sys.exit(1)
 "
         
         echo ""
-        echo "📁 Training artifacts saved to: $OUTPUT_DIR"
+        echo "📁 Results saved to: $OUTPUT_DIR"
+        echo "📄 Summary: ${OUTPUT_DIR}/ddp_training_summary.json"
         
-        # Display WandB information if available
-        if [ "$USE_WANDB" = true ]; then
-            echo ""
-            echo "📊 WandB Dashboard:"
-            echo "=================="
-            echo "🔗 View detailed metrics, plots, and logs at your WandB dashboard"
-            echo "🔗 Project: https://wandb.ai/your-username/$WANDB_PROJECT"
-            echo "🔗 Run: $WANDB_RUN_NAME"
-            echo ""
-            echo "📊 WandB Features Available:"
-            echo "  • Real-time loss and similarity curves"
-            echo "  • Task-specific evaluation metrics"
-            echo "  • Gradient norm tracking"
-            echo "  • Learning rate scheduling visualization"
-            echo "  • Sphere constraint violation monitoring"
-            echo "  • Overfitting test progress"
-            echo "  • Model architecture and hyperparameter logging"
+        # Check for checkpoints
+        CHECKPOINT_COUNT=$(find "$OUTPUT_DIR" -name "checkpoint_step_*.pt" | wc -l)
+        echo "💾 Checkpoints saved: $CHECKPOINT_COUNT"
+        
+        if [ $CHECKPOINT_COUNT -gt 0 ]; then
+            LATEST_CHECKPOINT=$(find "$OUTPUT_DIR" -name "checkpoint_step_*.pt" | sort -V | tail -1)
+            echo "📦 Latest checkpoint: $(basename $LATEST_CHECKPOINT)"
         fi
+        
     else
-        echo "⚠️ No final summary found, checking for other outputs..."
-        echo "Directory contents:"
-        ls -la "$OUTPUT_DIR" 2>/dev/null || echo "Output directory not found"
+        echo "⚠️ No training summary found"
     fi
     
     echo ""
-    echo "🎯 Next Steps:"
-    echo "=============="
-    echo "1. Review training logs above for success indicators"
-    if [ "$USE_WANDB" = true ]; then
-        echo "2. 📊 Check WandB dashboard for detailed metrics and visualizations"
-    fi
-    echo "3. If overfitting test passed, run full-scale training:"
-    echo "   • Increase MAX_SHARDS to use more data" 
-    echo "   • Increase NUM_EPOCHS for longer training"
-    echo "   • Adjust BATCH_SIZE based on memory usage"
-    echo "4. Run comprehensive evaluation on held-out data"
-    echo "5. Try different task modes:"
-    echo "   • Change TASK_MODE to 'eva_denoising' for original task"
-    echo "   • Change TASK_MODE to 'clip_denoising' for new task"
+    echo "🎯 Multi-GPU DDP Training Success!"
+    echo "=================================="
+    echo "✅ Trained on $MAX_SHARDS shards using $WORLD_SIZE GPUs"
+    echo "✅ Memory optimization prevented OOM errors"
+    echo "✅ Effective batch size: $EFFECTIVE_BATCH_SIZE"
+    echo "✅ Task: $TASK_MODE with spherical flow matching"
     echo ""
-    
-    if [ "$TASK_MODE" = "eva_denoising" ]; then
-        echo "🔍 EVA DENOISING SUCCESS INDICATORS:"
-        echo "  ✅ Final EVA similarity >0.5 (good), >0.7 (excellent)"
-        echo "  ✅ Overfitting test achieves >0.8 similarity"
-        echo "  ✅ High quality ratio >50% (similarity >0.7)"
-    elif [ "$TASK_MODE" = "clip_denoising" ]; then
-        echo "🔍 CLIP DENOISING SUCCESS INDICATORS:"
-        echo "  ✅ Final CLIP similarity >0.4 (good), >0.6 (excellent)"
-        echo "  ✅ Overfitting test achieves >0.7 similarity"
-        echo "  ✅ High quality ratio >40% (similarity >0.6)"
-        echo "  ✅ Cross-attention learns 1024D ↔ 4096D mapping"
-    fi
-    
-    echo "  ✅ Non-zero gradients throughout training"
-    echo "  ✅ Decreasing loss trend"
-    echo "  ✅ Increasing similarity metrics"
-    echo "  ✅ Unit sphere constraints maintained"
-    if [ "$USE_WANDB" = true ]; then
-        echo "  📊 All metrics logged to WandB for analysis"
-    fi
-    
-    echo ""
-    echo "✅ SUCCESS: Universal denoising training completed!"
+    echo "💡 Next Steps:"
+    echo "  • Review training curves in WandB (if enabled)"
+    echo "  • Run evaluation script for detailed analysis"
+    echo "  • Consider fine-tuning hyperparameters if needed"
+    echo "  • Scale to more shards or larger model if results are good"
     
 else
-    echo "❌ FAILED: Training exit code $TRAINING_EXIT_CODE"
+    echo "❌ FAILED: Multi-GPU DDP training exit code $TRAINING_EXIT_CODE"
     echo ""
-    echo "💡 Troubleshooting Universal Implementation:"
-    echo "  • Check log files in ./slurm_out/ for detailed error messages"
-    echo "  • Verify all universal Python files are present:"
-    echo "    - train_eva_repro.py (main script)"
-    echo "    - src/modules/models/blip3o_eva_dit.py (universal model)"
-    echo "    - src/modules/losses/blip3o_eva_loss.py (universal loss)"
-    echo "    - src/modules/datasets/blip3o_eva_dataset.py (universal dataset)"
-    echo "    - src/modules/trainers/blip3o_eva_trainer.py (universal trainer)"
-    echo "    - src/modules/config/blip3o_config.py (universal config)"
-    echo "  • Check embeddings directory structure and file formats"
-    echo "  • Ensure embeddings contain both CLIP and EVA embeddings for clip_denoising"
-    echo "  • Monitor GPU memory usage with nvidia-smi"
-    echo "  • Try reducing batch_size if out-of-memory errors"
-    if [ "$USE_WANDB" = true ]; then
-        echo "  • Check WandB dashboard for any logged metrics before failure"
+    echo "🔍 Debugging Information:"
+    echo "========================"
+    echo "Exit code: $TRAINING_EXIT_CODE"
+    echo "Log files:"
+    echo "  - SLURM output: slurm_out/blip3o_ddp_${SLURM_JOB_ID}.out"
+    echo "  - SLURM error: slurm_out/blip3o_ddp_${SLURM_JOB_ID}.err"
+    
+    if [ -d "$OUTPUT_DIR" ]; then
+        echo "  - Training logs: $OUTPUT_DIR/training_rank_*.log"
     fi
+    
     echo ""
-    echo "🔧 Quick Recovery Options:"
-    echo "  • Start with overfitting test: --overfit_test_size 5 --batch_size 2"
-    echo "  • Use smaller model: --model_size tiny"
-    echo "  • Enable more debugging: --debug_mode --max_shards 1"
-    echo "  • Try eva_denoising task first to verify basic functionality"
-    echo "  • Check if embeddings contain both CLIP and EVA data"
-    echo "  • Disable WandB if causing issues: set USE_WANDB=false"
+    echo "💡 Troubleshooting:"
+    echo "  • Check SLURM logs for OOM or CUDA errors"
+    echo "  • Verify embeddings directory and file permissions"
+    echo "  • Try reducing batch_size or max_shard_cache if OOM persists"
+    echo "  • Check GPU compatibility and CUDA version"
+    echo "  • Verify DDP setup and network configuration"
+    
+    # Final system status
+    echo ""
+    echo "📊 Final System Status:"
+    echo "Memory: $(free -h | awk '/^Mem:/ {print $3 "/" $2}')"
+    nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits | awk '{print "GPU Memory: " $1 "/" $2 " MB"}'
 fi
-
-echo ""
-echo "📊 GPU Resource Usage Summary:"
-nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu --format=csv,noheader,nounits | \
-    awk 'BEGIN{print "GPU | Total Memory | Used Memory | Utilization"} {printf "%s | %s MB | %s MB | %s%%\n", $1, $2, $3, $4}'
 
 echo ""
 echo "🏁 Job completed at $(date)"
-echo "Total job time: $(echo "scale=2; ($(date +%s) - $SECONDS) / 3600" | bc -l) hours"
-echo ""
-echo "📚 UNIVERSAL ARCHITECTURE SUMMARY:"
-echo "This job tests Universal BLIP3-o DiT architecture for both EVA and CLIP denoising."
-echo "Task mode: $TASK_MODE"
-
-if [ "$TASK_MODE" = "eva_denoising" ]; then
-    echo "EVA Denoising: Validates original spherical flow matching on 4096D space."
-elif [ "$TASK_MODE" = "clip_denoising" ]; then
-    echo "CLIP Denoising: Validates cross-attention conditioning between 1024D and 4096D spaces."
-fi
-
-echo "Success indicates the universal architecture is correctly implemented and ready."
-
-if [ "$USE_WANDB" = true ]; then
-    echo ""
-    echo "📊 WandB Integration Summary:"
-    echo "✅ Comprehensive metrics logging enabled"
-    echo "✅ Real-time training visualization"
-    echo "✅ Task-specific evaluation tracking"
-    echo "✅ Project: $WANDB_PROJECT"
-    echo "✅ Run: $WANDB_RUN_NAME"
-fi
-
 echo "========================================"
+
+# Final cleanup
+if [ -d "$OUTPUT_DIR" ]; then
+    echo "📁 Results available in: $OUTPUT_DIR"
+fi
 
 exit $TRAINING_EXIT_CODE
