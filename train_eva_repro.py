@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Universal BLIP3-o Training Script - EVA & CLIP Denoising
+Universal BLIP3-o Training Script - EVA & CLIP Denoising with WandB Integration
 Supports both EVA-to-EVA and CLIP-to-CLIP (with EVA conditioning) denoising tasks
 
 Usage:
@@ -9,6 +9,9 @@ Usage:
 
   # CLIP Denoising with EVA Conditioning (new task)  
   python train_universal_denoising.py --task_mode clip_denoising --chunked_embeddings_dir /path/to/embeddings --output_dir ./checkpoints_clip
+
+  # With WandB logging
+  python train_universal_denoising.py --task_mode eva_denoising --use_wandb --wandb_project "blip3o-denoising" --wandb_run_name "eva-test-run"
 """
 
 import os
@@ -104,6 +107,16 @@ def parse_arguments():
     parser.add_argument("--max_shards", type=int, default=1,
                        help="Maximum number of shards to use")
     
+    # WandB integration - NEW!
+    parser.add_argument("--use_wandb", action="store_true",
+                       help="Enable Weights & Biases logging")
+    parser.add_argument("--wandb_project", type=str, default="blip3o-universal-denoising",
+                       help="WandB project name")
+    parser.add_argument("--wandb_run_name", type=str, default=None,
+                       help="WandB run name (auto-generated if not provided)")
+    parser.add_argument("--wandb_tags", type=str, nargs="*", default=[],
+                       help="WandB tags for the run")
+    
     # System
     parser.add_argument("--fp16", action="store_true", default=True,
                        help="Use mixed precision")
@@ -111,6 +124,47 @@ def parse_arguments():
                        help="Number of dataloader workers")
     
     return parser.parse_args()
+
+def setup_wandb(args, config, logger):
+    """Setup WandB logging if enabled"""
+    if not args.use_wandb:
+        logger.info("WandB logging disabled")
+        return None
+    
+    try:
+        import wandb
+        logger.info("Setting up WandB logging...")
+        
+        # Generate run name if not provided
+        if args.wandb_run_name is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            args.wandb_run_name = f"{args.task_mode}_{args.model_size}_{timestamp}"
+        
+        # Initialize WandB
+        run = wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            config=config,
+            tags=args.wandb_tags + [args.task_mode, args.model_size, args.training_mode],
+            notes=f"Universal BLIP3-o {args.task_mode} training",
+            dir=args.output_dir
+        )
+        
+        logger.info(f"✅ WandB initialized:")
+        logger.info(f"  Project: {args.wandb_project}")
+        logger.info(f"  Run name: {args.wandb_run_name}")
+        logger.info(f"  Tags: {run.tags}")
+        logger.info(f"  URL: {run.url}")
+        
+        return run
+        
+    except ImportError:
+        logger.error("❌ WandB not installed but --use_wandb specified")
+        logger.error("Install with: pip install wandb")
+        return None
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize WandB: {e}")
+        return None
 
 def print_task_banner(args, logger):
     """Print task-specific banner"""
@@ -137,6 +191,10 @@ def print_task_banner(args, logger):
         logger.info("  🧠 Key: Cross-attention between 1024D and 4096D spaces")
     
     logger.info("  🏗️ Model: Universal BLIP3-o DiT with cross-attention conditioning")
+    
+    if args.use_wandb:
+        logger.info(f"  📊 WandB: {args.wandb_project}/{args.wandb_run_name}")
+    
     logger.info("=" * 80)
 
 def setup_device_and_model(args, logger):
@@ -239,7 +297,7 @@ def create_dataloaders(args, logger):
     
     return train_dataloader, eval_dataloader
 
-def create_trainer(model, loss_fn, train_dataloader, eval_dataloader, args, device, logger):
+def create_trainer(model, loss_fn, train_dataloader, eval_dataloader, args, device, logger, wandb_instance=None):
     """Create universal trainer"""
     try:
         from src.modules.trainers.blip3o_eva_trainer import create_universal_trainer
@@ -267,7 +325,8 @@ def create_trainer(model, loss_fn, train_dataloader, eval_dataloader, args, devi
         overfit_test_size=args.overfit_test_size,
         output_dir=args.output_dir,
         task_mode=args.task_mode,  # NEW: Pass task mode
-        device=device
+        device=device,
+        wandb_instance=wandb_instance  # NEW: Pass WandB instance
     )
     
     logger.info("Universal trainer created")
@@ -329,6 +388,10 @@ def main():
     if args.overfit_test_size:
         logger.info(f"  🧪 OVERFITTING TEST: {args.overfit_test_size} samples")
     logger.info(f"  Debug mode: {args.debug_mode}")
+    logger.info(f"  WandB enabled: {args.use_wandb}")
+    if args.use_wandb:
+        logger.info(f"  WandB project: {args.wandb_project}")
+        logger.info(f"  WandB run name: {args.wandb_run_name or 'auto-generated'}")
     
     logger.info("=" * 80)
     logger.info("🔧 UNIVERSAL ARCHITECTURE FEATURES:")
@@ -339,6 +402,8 @@ def main():
     logger.info("  ✅ Task-specific evaluation metrics")
     logger.info("  ✅ Gradient clipping for stability")
     logger.info("  ✅ Mixed precision training support")
+    if args.use_wandb:
+        logger.info("  ✅ WandB logging and visualization")
     logger.info("=" * 80)
     
     try:
@@ -360,9 +425,6 @@ def main():
         except Exception as e:
             logger.warning(f"⚠️ Could not validate first batch: {e}")
             logger.warning("Continuing with training...")
-        
-        # Create trainer
-        trainer = create_trainer(model, loss_fn, train_dataloader, eval_dataloader, args, device, logger)
         
         # Save configuration
         config = {
@@ -389,14 +451,26 @@ def main():
                 'proper_gradient_flow',
                 'numerical_stability_improvements',
                 'task_specific_evaluation_metrics',
-            ]
+            ],
+            'wandb_config': {
+                'enabled': args.use_wandb,
+                'project': args.wandb_project if args.use_wandb else None,
+                'run_name': args.wandb_run_name if args.use_wandb else None,
+                'tags': args.wandb_tags if args.use_wandb else None,
+            }
         }
+        
+        # Setup WandB if enabled
+        wandb_instance = setup_wandb(args, config, logger)
         
         config_path = output_dir / 'experiment_config.json'
         with open(config_path, 'w') as f:
             json.dump(config, f, indent=2)
         
         logger.info(f"Configuration saved to {config_path}")
+        
+        # Create trainer with WandB instance
+        trainer = create_trainer(model, loss_fn, train_dataloader, eval_dataloader, args, device, logger, wandb_instance)
         
         # Start training
         logger.info(f"\n🚀 Starting {args.task_mode} training...")
@@ -422,6 +496,8 @@ def main():
         
         logger.info("  • 📈 Gradients should be stable and non-zero")
         logger.info("  • 🚫 No negative cosine similarities at convergence")
+        if args.use_wandb and wandb_instance:
+            logger.info(f"  • 📊 Metrics will be logged to WandB: {wandb_instance.url}")
         logger.info("")
         
         start_time = datetime.now()
@@ -431,6 +507,31 @@ def main():
         
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
+        
+        # Log final summary to WandB
+        if args.use_wandb and wandb_instance:
+            try:
+                wandb_instance.log({
+                    "final/duration_seconds": duration,
+                    "final/total_steps": summary.get('total_steps', 0),
+                    "final/best_loss": summary.get('best_loss', float('inf')),
+                    "final/best_eval_similarity": summary.get('best_eval_similarity', 0),
+                    "final/overfit_success": summary.get('overfit_success', False),
+                })
+                
+                # Log final evaluation metrics
+                final_eval = summary.get('final_eval', {})
+                if final_eval:
+                    wandb_final_eval = {}
+                    for key, value in final_eval.items():
+                        if isinstance(value, (int, float)):
+                            wandb_final_eval[f"final_eval/{key}"] = value
+                    if wandb_final_eval:
+                        wandb_instance.log(wandb_final_eval)
+                
+                logger.info("✅ Final metrics logged to WandB")
+            except Exception as e:
+                logger.warning(f"Failed to log final metrics to WandB: {e}")
         
         # Final summary
         logger.info("\n" + "=" * 80)
@@ -489,6 +590,7 @@ def main():
         summary['duration_seconds'] = duration
         summary['end_time'] = end_time.isoformat()
         summary['experiment_config'] = config
+        summary['wandb_url'] = wandb_instance.url if args.use_wandb and wandb_instance else None
         
         summary_path = output_dir / 'final_summary.json'
         with open(summary_path, 'w') as f:
@@ -497,6 +599,9 @@ def main():
         logger.info(f"📁 Final summary saved to {summary_path}")
         logger.info(f"📁 Model checkpoints saved to {output_dir}")
         
+        if args.use_wandb and wandb_instance:
+            logger.info(f"📊 WandB run: {wandb_instance.url}")
+        
         logger.info("=" * 80)
         logger.info("🎯 MISSION ACCOMPLISHED:")
         logger.info(f"  ✅ {args.task_mode} training completed")
@@ -504,7 +609,17 @@ def main():
         logger.info("  ✅ Task-adaptive architecture working")
         logger.info("  ✅ Comprehensive evaluation performed")
         logger.info(f"  🎯 Final similarity: {summary.get('best_eval_similarity', 0):.4f}")
+        if args.use_wandb and wandb_instance:
+            logger.info(f"  📊 WandB logging completed")
         logger.info("=" * 80)
+        
+        # Finish WandB run
+        if args.use_wandb and wandb_instance:
+            try:
+                wandb_instance.finish()
+                logger.info("✅ WandB run finished")
+            except Exception as e:
+                logger.warning(f"Warning finishing WandB run: {e}")
         
         # Return appropriate exit code
         best_sim = summary.get('best_eval_similarity', 0)
@@ -518,10 +633,30 @@ def main():
     except Exception as e:
         logger.error(f"❌ Training failed with error: {e}")
         traceback.print_exc()
+        
+        # Finish WandB run on error
+        if args.use_wandb:
+            try:
+                import wandb
+                if wandb.run is not None:
+                    wandb.finish(exit_code=1)
+            except:
+                pass
+        
         return 1
     
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
+        
+        # Finish WandB run on interrupt
+        if args.use_wandb:
+            try:
+                import wandb
+                if wandb.run is not None:
+                    wandb.finish(exit_code=1)
+            except:
+                pass
+        
         return 1
 
 if __name__ == "__main__":
