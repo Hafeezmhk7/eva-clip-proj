@@ -1,0 +1,87 @@
+2025-07-27 07:19:14,340 - INFO - 🚀 Starting EVA-CLIP Reproduction with Fixed BLIP3-o DiT
+2025-07-27 07:19:14,342 - INFO - ================================================================================
+2025-07-27 07:19:14,342 - INFO - EXPERIMENT DETAILS:
+2025-07-27 07:19:14,342 - INFO -   📋 Task: Reproduce clean EVA embeddings from noisy EVA embeddings
+2025-07-27 07:19:14,342 - INFO -   🧠 Model: BLIP3-o DiT with 3D RoPE and Grouped-Query Attention
+2025-07-27 07:19:14,342 - INFO -   🎯 Target: EVA embeddings [B, N, 4096]
+2025-07-27 07:19:14,342 - INFO -   🎮 Conditioning: CLIP embeddings [B, N, 1024]
+2025-07-27 07:19:14,342 - INFO -   🌊 Method: Rectified Flow Matching
+2025-07-27 07:19:14,342 - INFO - ================================================================================
+2025-07-27 07:19:14,342 - INFO - 📊 WandB logging disabled by user
+2025-07-27 07:19:14,342 - INFO - Configuration:
+2025-07-27 07:19:14,342 - INFO -   Model size: base
+2025-07-27 07:19:14,342 - INFO -   Training mode: patch_only
+2025-07-27 07:19:14,342 - INFO -   Embeddings dir: /scratch-shared/azadaianchuk1/blip3o_workspace/embeddings/patch_only_256_tokens
+2025-07-27 07:19:14,342 - INFO -   Output dir: ./checkpoints/eva_repro_wandb_fixed_20250727_071912
+2025-07-27 07:19:14,342 - INFO -   Learning rate: 0.0005
+2025-07-27 07:19:14,342 - INFO -   Batch size: 8
+2025-07-27 07:19:14,342 - INFO -   Epochs: 10
+2025-07-27 07:19:14,342 - INFO -   Max shards: 1
+2025-07-27 07:19:14,343 - INFO -   🧪 OVERFITTING TEST: 20 samples
+2025-07-27 07:19:14,343 - INFO -   Debug mode: True
+2025-07-27 07:19:14,343 - INFO -   WandB enabled: False
+2025-07-27 07:19:14,343 - INFO - ================================================================================
+2025-07-27 07:19:15,993 - INFO - Using GPU: NVIDIA H100
+2025-07-27 07:19:15,993 - INFO - GPU Memory: 100.0 GB
+2025-07-27 07:19:19,184 - INFO - ✅ Universal denoising model loaded successfully
+2025-07-27 07:19:19,184 - INFO -    ✅ Supports: EVA denoising (4096D) & CLIP denoising (1024D)
+2025-07-27 07:19:19,185 - INFO - ✅ Universal spherical flow matching loss loaded successfully
+2025-07-27 07:19:19,185 - INFO -    ✅ Supports: Universal spherical flow for any embedding dimension
+2025-07-27 07:19:19,186 - ERROR - ❌ Universal trainer import failed: cannot import name 'UniversalDenoisingTrainer' from 'src.modules.trainers.blip3o_eva_trainer' (/gpfs/home4/azadaianchuk1/eva-clip-v5/src/modules/trainers/blip3o_eva_trainer.py)
+2025-07-27 07:19:19,187 - ERROR - ❌ Universal dataset import failed: cannot import name 'UniversalDenoisingDataset' from 'src.modules.datasets.blip3o_eva_dataset' (/gpfs/home4/azadaianchuk1/eva-clip-v5/src/modules/datasets/blip3o_eva_dataset.py)
+2025-07-27 07:19:19,189 - INFO - ✅ Universal configuration loaded successfully
+2025-07-27 07:19:19,189 - INFO -    ✅ Supports: Task-adaptive configs for EVA & CLIP denoising
+2025-07-27 07:19:19,189 - ERROR - ❌ Missing universal components: ['universal_trainer', 'universal_dataset']
+2025-07-27 07:19:19,189 - ERROR - ❌ UNIVERSAL DENOISING components missing!
+2025-07-27 07:19:19,189 - ERROR -    Please ensure the following files are present:
+2025-07-27 07:19:19,189 - ERROR -      - src/modules/models/blip3o_eva_dit.py
+2025-07-27 07:19:19,189 - ERROR -      - src/modules/losses/blip3o_eva_loss.py
+2025-07-27 07:19:19,189 - ERROR -      - src/modules/trainers/blip3o_eva_trainer.py
+2025-07-27 07:19:19,189 - ERROR -      - src/modules/datasets/blip3o_eva_dataset.py
+2025-07-27 07:19:19,189 - ERROR -      - src/modules/config/blip3o_config.py
+2025-07-27 07:19:19,189 - ERROR - ❌ CRITICAL: No denoising components available!
+2025-07-27 07:19:19,190 - INFO - Creating base model for patch_only mode...
+2025-07-27 07:19:21,081 - INFO - Universal DiT model initialized with 212,073,472 parameters
+2025-07-27 07:19:21,082 - INFO -   Task: EVA-CLIP Denoising
+2025-07-27 07:19:21,082 - INFO -   Input: Noisy EVA [B, N, 4096]
+2025-07-27 07:19:21,082 - INFO -   Conditioning: Clean EVA [B, N, 4096]
+2025-07-27 07:19:21,082 - INFO -   Output: Clean EVA [B, N, 4096]
+2025-07-27 07:19:21,082 - INFO -   Prediction type: velocity
+2025-07-27 07:19:21,315 - INFO - Model created with 212,073,472 parameters
+2025-07-27 07:19:21,315 - INFO - Model moved to cuda
+2025-07-27 07:19:21,316 - INFO - Creating flow matching loss...
+2025-07-27 07:19:21,316 - INFO - Universal Spherical Flow Matching Loss initialized:
+2025-07-27 07:19:21,316 - INFO -   Prediction type: velocity
+2025-07-27 07:19:21,316 - INFO -   Loss weight: 1.0
+2025-07-27 07:19:21,316 - INFO -   Sphere constraint weight: 0.1
+2025-07-27 07:19:21,316 - INFO -   Supports: EVA denoising (4096D) & CLIP denoising (1024D)
+2025-07-27 07:19:21,316 - INFO -   Debug mode: True
+2025-07-27 07:19:21,316 - INFO - Flow matching loss created
+2025-07-27 07:19:21,316 - INFO - Creating dataloaders...
+2025-07-27 07:19:21,316 - INFO - Creating EVA reproduction dataloaders:
+2025-07-27 07:19:21,316 - INFO -   Target: EVA embeddings [B, N, 4096]
+2025-07-27 07:19:21,316 - INFO -   Conditioning: CLIP embeddings [B, N, 1024]
+2025-07-27 07:19:21,316 - INFO -   Normalize: True
+2025-07-27 07:19:21,318 - INFO - Loaded manifest: 1 shards, 2,646 samples
+2025-07-27 07:19:21,318 - INFO - Found 1 files with pattern: embeddings_shard_*_patch_only.pkl
+2025-07-27 07:19:21,330 - INFO - Prepared 1 shard files
+2025-07-27 07:19:21,330 - INFO - EVA Reproduction Dataset initialized:
+2025-07-27 07:19:21,331 - INFO -   Directory: /scratch-shared/azadaianchuk1/blip3o_workspace/embeddings/patch_only_256_tokens
+2025-07-27 07:19:21,331 - INFO -   Mode: patch_only (256 tokens)
+2025-07-27 07:19:21,331 - INFO -   TARGET: EVA embeddings [B, N, 4096]
+2025-07-27 07:19:21,331 - INFO -   CONDITIONING: CLIP embeddings [B, N, 1024]
+2025-07-27 07:19:21,331 - INFO -   Normalize: True
+2025-07-27 07:19:21,331 - INFO -   Shards: 1
+2025-07-27 07:19:21,331 - INFO - Loaded manifest: 1 shards, 2,646 samples
+2025-07-27 07:19:21,331 - INFO - Found 1 files with pattern: embeddings_shard_*_patch_only.pkl
+2025-07-27 07:19:21,331 - INFO - Prepared 1 shard files
+2025-07-27 07:19:21,331 - INFO - EVA Reproduction Dataset initialized:
+2025-07-27 07:19:21,331 - INFO -   Directory: /scratch-shared/azadaianchuk1/blip3o_workspace/embeddings/patch_only_256_tokens
+2025-07-27 07:19:21,331 - INFO -   Mode: patch_only (256 tokens)
+2025-07-27 07:19:21,331 - INFO -   TARGET: EVA embeddings [B, N, 4096]
+2025-07-27 07:19:21,331 - INFO -   CONDITIONING: CLIP embeddings [B, N, 1024]
+2025-07-27 07:19:21,331 - INFO -   Normalize: True
+2025-07-27 07:19:21,331 - INFO -   Shards: 1
+2025-07-27 07:19:21,331 - INFO - EVA reproduction dataloaders created successfully
+2025-07-27 07:19:21,331 - INFO - Dataloaders created
+2025-07-27 07:19:21,332 - ERROR - ❌ Training failed with error: object of type 'BLIP3oEVAReproductionDataset' has no len()

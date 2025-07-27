@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Enhanced BLIP3-o Trainer with WandB Integration - Support for Both EVA and CLIP Denoising
-Key features:
-1. Universal training loop for both EVA and CLIP denoising
-2. Comprehensive WandB logging and metric tracking
-3. Task-specific evaluation metrics
-4. Automatic task detection and validation
-5. Real-time dashboard monitoring
+Fixed BLIP3-o Trainer for EVA-CLIP Reproduction with WandB Integration
+Key fixes:
+1. Proper gradient flow and monitoring
+2. Better learning rate scheduling
+3. Overfitting test capability
+4. Comprehensive debugging and metrics
+5. Fixed WandB integration without config_paths issues
 """
 
 import torch
@@ -22,22 +22,13 @@ import json
 import gc
 from collections import deque
 import math
-import os
-
-# WandB Integration
-try:
-    import wandb
-    WANDB_AVAILABLE = True
-except ImportError:
-    WANDB_AVAILABLE = False
-    wandb = None
 
 logger = logging.getLogger(__name__)
 
 
-class UniversalDenoisingTrainer:
+class BLIP3oEVATrainerWithWandB:
     """
-    Universal trainer for both EVA and CLIP denoising with comprehensive WandB monitoring
+    Fixed trainer for EVA reproduction with comprehensive monitoring and WandB integration
     """
     
     def __init__(
@@ -62,18 +53,12 @@ class UniversalDenoisingTrainer:
         overfit_test_size: Optional[int] = None,
         log_every_n_steps: int = 10,
         save_every_n_steps: int = 500,
-        # Task configuration
-        task_mode: Optional[str] = None,
         # Output
         output_dir: str = "./checkpoints",
         # Device
         device: Optional[torch.device] = None,
-        # WandB configuration
-        use_wandb: bool = True,
-        wandb_project: str = "blip3o-universal-denoising",
-        wandb_run_name: Optional[str] = None,
-        wandb_tags: Optional[List[str]] = None,
-        wandb_config: Optional[Dict[str, Any]] = None,
+        # WandB
+        wandb_instance=None,
     ):
         self.model = model
         self.loss_fn = loss_fn
@@ -99,9 +84,6 @@ class UniversalDenoisingTrainer:
         self.log_every_n_steps = log_every_n_steps
         self.save_every_n_steps = save_every_n_steps
         
-        # Task configuration
-        self.task_mode = task_mode
-        
         # Output
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -110,19 +92,15 @@ class UniversalDenoisingTrainer:
         self.device = device or (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
         self.model = self.model.to(self.device)
         
-        # WandB configuration
-        self.use_wandb = use_wandb and WANDB_AVAILABLE
-        self.wandb_project = wandb_project
-        self.wandb_run_name = wandb_run_name
-        self.wandb_tags = wandb_tags or []
-        self.wandb_config = wandb_config or {}
+        # WandB
+        self.wandb = wandb_instance
         
         # Setup optimizer and scheduler
         self._setup_optimizer_and_scheduler()
         
         # Setup mixed precision
         if self.fp16:
-            self.scaler = torch.amp.GradScaler('cuda')
+            self.scaler = torch.cuda.amp.GradScaler()
         else:
             self.scaler = None
         
@@ -132,189 +110,24 @@ class UniversalDenoisingTrainer:
         self.best_eval_similarity = 0.0
         self.best_loss = float('inf')
         
-        # Metrics tracking (universal for both tasks)
+        # Metrics tracking
         self.loss_history = deque(maxlen=1000)
         self.similarity_history = deque(maxlen=1000)
-        self.eval_similarity_history = deque(maxlen=1000)
         self.lr_history = deque(maxlen=1000)
         self.grad_norm_history = deque(maxlen=1000)
-        self.sphere_violation_history = deque(maxlen=1000)
-        
-        # Task-specific tracking
-        self.eva_similarity_history = deque(maxlen=1000)
-        self.clip_similarity_history = deque(maxlen=1000)
         
         # Overfitting test data
         self.overfit_batch = None
         if self.overfit_test_size:
             self._prepare_overfit_test()
         
-        # Auto-detect task mode if not provided
-        if self.task_mode is None:
-            self.task_mode = self._detect_task_mode()
-        
-        # Setup WandB
-        self._setup_wandb()
-        
-        # Log initialization
-        task_info = self._get_task_info()
-        logger.info("Universal Denoising Trainer with WandB initialized")
+        logger.info("BLIP3-o EVA Trainer with WandB initialized")
         logger.info(f"  Device: {self.device}")
-        logger.info(f"  Task: {task_info['task']}")
-        logger.info(f"  Input: {task_info['input']}")
-        logger.info(f"  Conditioning: {task_info['conditioning']}")
-        logger.info(f"  Target: {task_info['target']}")
         logger.info(f"  Learning rate: {self.learning_rate}")
         logger.info(f"  Epochs: {self.num_epochs}")
-        logger.info(f"  Prediction type: {getattr(self.model.config, 'prediction_type', 'velocity')}")
         logger.info(f"  Overfit test: {self.overfit_test_size if self.overfit_test_size else 'Disabled'}")
         logger.info(f"  Mixed precision: {self.fp16}")
-        logger.info(f"  WandB enabled: {self.use_wandb}")
-        if self.use_wandb:
-            logger.info(f"  WandB project: {self.wandb_project}")
-
-    def _setup_wandb(self):
-        """Setup WandB logging"""
-        if not self.use_wandb:
-            logger.info("WandB disabled")
-            return
-        
-        if not WANDB_AVAILABLE:
-            logger.warning("WandB not available, disabling logging")
-            self.use_wandb = False
-            return
-        
-        try:
-            # Detect task mode for run naming
-            if self.wandb_run_name is None:
-                model_size = getattr(self.model.config, 'hidden_size', 768)
-                size_map = {384: "tiny", 512: "small", 768: "base", 1024: "large"}
-                size_name = size_map.get(model_size, "custom")
-                self.wandb_run_name = f"{self.task_mode}-{size_name}-{int(time.time())}"
-            
-            # Prepare WandB config
-            config = {
-                # Task configuration
-                "task_mode": self.task_mode,
-                "model_size": getattr(self.model.config, 'hidden_size', 768),
-                "prediction_type": getattr(self.model.config, 'prediction_type', 'velocity'),
-                "training_mode": getattr(self.model.config, 'training_mode', 'patch_only'),
-                
-                # Model architecture
-                "num_layers": getattr(self.model.config, 'num_hidden_layers', 12),
-                "num_attention_heads": getattr(self.model.config, 'num_attention_heads', 12),
-                "intermediate_size": getattr(self.model.config, 'intermediate_size', 3072),
-                "eva_embedding_size": getattr(self.model.config, 'eva_embedding_size', 4096),
-                "clip_embedding_size": getattr(self.model.config, 'clip_embedding_size', 1024),
-                
-                # Training hyperparameters
-                "learning_rate": self.learning_rate,
-                "weight_decay": self.weight_decay,
-                "num_epochs": self.num_epochs,
-                "warmup_steps": self.warmup_steps,
-                "max_grad_norm": self.max_grad_norm,
-                "fp16": self.fp16,
-                
-                # Evaluation
-                "eval_every_n_steps": self.eval_every_n_steps,
-                "eval_num_samples": self.eval_num_samples,
-                "eval_inference_steps": self.eval_inference_steps,
-                
-                # System
-                "device": str(self.device),
-                "model_parameters": self.model.get_num_parameters(),
-                
-                # Debugging
-                "debug_mode": self.debug_mode,
-                "overfit_test_size": self.overfit_test_size,
-            }
-            
-            # Add custom config
-            config.update(self.wandb_config)
-            
-            # Add task-specific tags
-            tags = self.wandb_tags.copy()
-            tags.extend([
-                self.task_mode,
-                "universal-denoising",
-                "spherical-flow-matching",
-                f"prediction-{config.get('prediction_type', 'velocity')}",
-                f"model-{config.get('model_size', 'unknown')}",
-            ])
-            
-            if self.overfit_test_size:
-                tags.append("overfitting-test")
-            
-            # Initialize WandB
-            wandb.init(
-                project=self.wandb_project,
-                name=self.wandb_run_name,
-                config=config,
-                tags=tags,
-                reinit=True,
-                save_code=True,
-            )
-            
-            # Log task-specific information
-            task_info = self._get_task_info()
-            wandb.config.update({
-                "task_description": task_info['task'],
-                "input_description": task_info['input'],
-                "conditioning_description": task_info['conditioning'],
-                "target_description": task_info['target'],
-            })
-            
-            # Log model architecture summary
-            wandb.watch(self.model, log="all", log_freq=100)
-            
-            logger.info(f"✅ WandB initialized: {wandb.run.url}")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize WandB: {e}")
-            self.use_wandb = False
-
-    def _detect_task_mode(self) -> str:
-        """Auto-detect task mode from model configuration"""
-        if hasattr(self.model, 'config') and hasattr(self.model.config, 'task_mode'):
-            return self.model.config.task_mode
-        
-        # Try to detect from first batch
-        try:
-            first_batch = next(iter(self.train_dataloader))
-            if 'task_mode' in first_batch:
-                detected_mode = first_batch['task_mode']
-                logger.info(f"Auto-detected task mode: {detected_mode}")
-                return detected_mode
-        except Exception as e:
-            logger.warning(f"Could not auto-detect task mode: {e}")
-        
-        # Default fallback
-        logger.warning("Could not detect task mode, defaulting to eva_denoising")
-        return "eva_denoising"
-
-    def _get_task_info(self) -> Dict[str, str]:
-        """Get task-specific information"""
-        if self.task_mode == "eva_denoising":
-            return {
-                "task": "EVA-CLIP Denoising",
-                "input": "Noisy EVA embeddings [B, N, 4096]",
-                "conditioning": "Clean EVA embeddings [B, N, 4096]",
-                "target": "Clean EVA embeddings [B, N, 4096]",
-            }
-        elif self.task_mode == "clip_denoising":
-            return {
-                "task": "CLIP-ViT Denoising with EVA Conditioning",
-                "input": "Noisy CLIP embeddings [B, N, 1024]",
-                "conditioning": "Clean EVA embeddings [B, N, 4096]",
-                "target": "Clean CLIP embeddings [B, N, 1024]",
-            }
-        else:
-            return {
-                "task": "Unknown Task",
-                "input": "Unknown",
-                "conditioning": "Unknown", 
-                "target": "Unknown",
-            }
+        logger.info(f"  WandB enabled: {self.wandb is not None}")
 
     def _setup_optimizer_and_scheduler(self):
         """Setup optimizer and learning rate scheduler"""
@@ -323,22 +136,15 @@ class UniversalDenoisingTrainer:
             self.model.parameters(),
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
-            betas=(0.9, 0.95),
+            betas=(0.9, 0.999),
             eps=1e-8
         )
         
         # Setup learning rate scheduler with warmup
-        try:
-            dataloader_length = len(self.train_dataloader)
-            total_steps = dataloader_length * self.num_epochs
-        except (TypeError, AttributeError):
-            logger.warning("Cannot determine exact dataloader length, using estimate")
-            estimated_samples_per_epoch = 10000
-            batch_size = getattr(self.train_dataloader, 'batch_size', 16)
-            estimated_batches_per_epoch = estimated_samples_per_epoch // batch_size
-            total_steps = estimated_batches_per_epoch * self.num_epochs
+        total_steps = len(self.train_dataloader) * self.num_epochs
         
         if self.warmup_steps > 0:
+            # Warmup + Cosine decay
             warmup_scheduler = LinearLR(
                 self.optimizer,
                 start_factor=0.1,
@@ -356,6 +162,7 @@ class UniversalDenoisingTrainer:
                 milestones=[self.warmup_steps]
             )
         else:
+            # Just cosine decay
             self.scheduler = CosineAnnealingLR(
                 self.optimizer,
                 T_max=total_steps,
@@ -363,7 +170,7 @@ class UniversalDenoisingTrainer:
             )
         
         logger.info(f"Optimizer and scheduler setup complete")
-        logger.info(f"  Estimated total steps: {total_steps}")
+        logger.info(f"  Total steps: {total_steps}")
         logger.info(f"  Warmup steps: {self.warmup_steps}")
 
     def _prepare_overfit_test(self):
@@ -371,7 +178,10 @@ class UniversalDenoisingTrainer:
         logger.info(f"Preparing overfitting test with {self.overfit_test_size} samples...")
         
         try:
+            # Get first batch and repeat it
             first_batch = next(iter(self.train_dataloader))
+            
+            # Trim to desired size
             actual_size = min(self.overfit_test_size, first_batch['batch_size'])
             
             self.overfit_batch = {}
@@ -383,15 +193,24 @@ class UniversalDenoisingTrainer:
                 else:
                     self.overfit_batch[key] = value
             
+            # Update batch size
             self.overfit_batch['batch_size'] = actual_size
+            
             logger.info(f"Overfitting test prepared with {actual_size} samples")
+            
+            # Log to WandB if available
+            if self.wandb:
+                self.wandb.log({
+                    "overfit_test/samples": actual_size,
+                    "overfit_test/enabled": True
+                })
             
         except Exception as e:
             logger.error(f"Failed to prepare overfitting test: {e}")
             self.overfit_batch = None
 
     def _compute_loss(self, batch: Dict[str, Any]) -> Tuple[torch.Tensor, Dict[str, float]]:
-        """Compute loss for a batch (universal for both tasks)"""
+        """Compute loss for a batch"""
         # Move batch to device
         for key, value in batch.items():
             if torch.is_tensor(value):
@@ -399,58 +218,53 @@ class UniversalDenoisingTrainer:
         
         # Use overfit batch if specified
         if self.overfit_batch is not None:
+            # Move overfit batch to device
             for key, value in self.overfit_batch.items():
                 if torch.is_tensor(value):
                     batch[key] = value.to(self.device)
                 else:
                     batch[key] = value
         
-        # Extract inputs (universal interface)
-        x_t = batch['hidden_states']                    # [B, N, input_dim] - Current flow state
+        # Extract inputs
+        hidden_states = batch['hidden_states']          # [B, N, 4096] - Noisy EVA
         timestep = batch['timestep']                    # [B] - Timesteps
-        conditioning = batch['encoder_hidden_states']   # [B, N, conditioning_dim] - Conditioning
-        target = batch['target_embeddings']             # [B, N, output_dim] - Target
-        velocity_target = batch.get('velocity_target')  # [B, N, input_dim] - Velocity target
-        noise = batch.get('noise')                      # [B, N, input_dim] - Noise
-        task_mode = batch.get('task_mode', self.task_mode)  # Task mode
+        encoder_hidden_states = batch['encoder_hidden_states']  # [B, N, 1024] - CLIP
+        eva_embeddings = batch['eva_embeddings']        # [B, N, 4096] - Clean EVA (target)
+        noise = batch.get('noise')                      # [B, N, 4096] - Noise
         
         # Forward pass
         if self.fp16:
-            with torch.amp.autocast('cuda'):
+            with torch.cuda.amp.autocast():
                 model_output = self.model(
-                    hidden_states=x_t,
+                    hidden_states=hidden_states,
                     timestep=timestep,
-                    encoder_hidden_states=conditioning,
+                    encoder_hidden_states=encoder_hidden_states,
                     return_dict=False
                 )
                 
-                # Compute universal spherical flow matching loss
+                # Compute loss
                 loss, metrics = self.loss_fn(
                     model_output=model_output,
-                    target_samples=target,
+                    target_samples=eva_embeddings,
                     timesteps=timestep,
-                    conditioning=conditioning,
+                    clip_conditioning=encoder_hidden_states,
                     noise=noise,
-                    x_t=x_t,
-                    task_mode=task_mode,
                     return_metrics=True
                 )
         else:
             model_output = self.model(
-                hidden_states=x_t,
+                hidden_states=hidden_states,
                 timestep=timestep,
-                encoder_hidden_states=conditioning,
+                encoder_hidden_states=encoder_hidden_states,
                 return_dict=False
             )
             
             loss, metrics = self.loss_fn(
                 model_output=model_output,
-                target_samples=target,
+                target_samples=eva_embeddings,
                 timesteps=timestep,
-                conditioning=conditioning,
+                clip_conditioning=encoder_hidden_states,
                 noise=noise,
-                x_t=x_t,
-                task_mode=task_mode,
                 return_metrics=True
             )
         
@@ -492,7 +306,7 @@ class UniversalDenoisingTrainer:
         return grad_norm
 
     def _evaluate(self, num_samples: Optional[int] = None) -> Dict[str, float]:
-        """Run universal denoising evaluation"""
+        """Run evaluation"""
         if self.eval_dataloader is None:
             return {}
         
@@ -502,56 +316,31 @@ class UniversalDenoisingTrainer:
         self.model.eval()
         
         all_similarities = []
-        all_angular_distances = []
-        all_sphere_violations = []
         samples_processed = 0
-        task_mode_detected = None
         
         with torch.no_grad():
             for batch in self.eval_dataloader:
                 if samples_processed >= num_samples:
                     break
                 
-                # Move to device - use the correct keys from universal collate function
-                try:
-                    # Use the actual keys from the universal collate function
-                    input_embeddings = batch['input_embeddings'].to(self.device)
-                    conditioning = batch['encoder_hidden_states'].to(self.device)  # This is the correct key!
-                    target = batch['target_embeddings'].to(self.device)
-                    task_mode_detected = batch.get('task_mode', self.task_mode)
-                except KeyError as e:
-                    logger.warning(f"Missing key in evaluation batch: {e}")
-                    logger.warning(f"Available keys: {list(batch.keys())}")
-                    # Skip this batch and continue
-                    continue
+                # Move to device
+                clip_features = batch['encoder_hidden_states'].to(self.device)
+                target_eva = batch['eva_embeddings'].to(self.device)
                 
-                # Denoise using the model
-                denoised = self.model.denoise(
-                    noisy_embeddings=input_embeddings,
-                    conditioning=conditioning,
+                # Generate EVA embeddings
+                generated_eva = self.model.generate(
+                    clip_features=clip_features,
                     num_inference_steps=self.eval_inference_steps,
+                    normalize_output=True
                 )
                 
                 # Compute similarity
-                target_norm = F.normalize(target, p=2, dim=-1)
-                denoised_norm = F.normalize(denoised, p=2, dim=-1)
-                
-                # Cosine similarity (main metric)
-                similarity = F.cosine_similarity(denoised_norm, target_norm, dim=-1)
+                target_norm = F.normalize(target_eva, p=2, dim=-1)
+                similarity = F.cosine_similarity(generated_eva, target_norm, dim=-1)
                 per_image_similarity = similarity.mean(dim=1)
                 
-                # Angular distance
-                cos_sim_clamped = torch.clamp(similarity, -1 + 1e-7, 1 - 1e-7)
-                angular_distance = torch.acos(cos_sim_clamped).mean(dim=1)
-                
-                # Sphere constraint violation
-                denoised_norms = torch.norm(denoised, dim=-1)
-                sphere_violation = torch.abs(denoised_norms - 1.0).mean(dim=1)
-                
                 all_similarities.append(per_image_similarity.cpu())
-                all_angular_distances.append(angular_distance.cpu())
-                all_sphere_violations.append(sphere_violation.cpu())
-                samples_processed += input_embeddings.shape[0]
+                samples_processed += clip_features.shape[0]
         
         self.model.train()
         
@@ -559,144 +348,88 @@ class UniversalDenoisingTrainer:
             return {}
         
         all_sims = torch.cat(all_similarities)
-        all_angular = torch.cat(all_angular_distances)
-        all_violations = torch.cat(all_sphere_violations)
         
-        # Task-specific metric names and thresholds
-        if task_mode_detected == "eva_denoising":
-            metric_prefix = "eval_eva"
-            high_thresh, very_high_thresh, excellent_thresh = 0.7, 0.8, 0.9
-        elif task_mode_detected == "clip_denoising":
-            metric_prefix = "eval_clip"
-            high_thresh, very_high_thresh, excellent_thresh = 0.6, 0.7, 0.8
-        else:
-            metric_prefix = "eval_generic"
-            high_thresh, very_high_thresh, excellent_thresh = 0.6, 0.7, 0.8
-        
-        return {
-            f'{metric_prefix}_similarity': all_sims.mean().item(),
-            f'{metric_prefix}_similarity_std': all_sims.std().item(),
-            f'{metric_prefix}_angular_distance': all_angular.mean().item(),
-            f'{metric_prefix}_sphere_violation': all_violations.mean().item(),
-            f'{metric_prefix}_high_quality': (all_sims > high_thresh).float().mean().item(),
-            f'{metric_prefix}_very_high_quality': (all_sims > very_high_thresh).float().mean().item(),
-            f'{metric_prefix}_excellent_quality': (all_sims > excellent_thresh).float().mean().item(),
-            f'{metric_prefix}_samples': samples_processed,
-            f'{metric_prefix}_similarity_min': all_sims.min().item(),
-            f'{metric_prefix}_similarity_max': all_sims.max().item(),
-            'eval_task_mode': task_mode_detected or self.task_mode,
+        eval_metrics = {
+            'eval_eva_similarity': all_sims.mean().item(),
+            'eval_eva_similarity_std': all_sims.std().item(),
+            'eval_high_quality': (all_sims > 0.7).float().mean().item(),
+            'eval_very_high_quality': (all_sims > 0.8).float().mean().item(),
+            'eval_excellent_quality': (all_sims > 0.9).float().mean().item(),
+            'eval_samples': samples_processed,
         }
+        
+        # Log to WandB if available
+        if self.wandb:
+            wandb_eval_metrics = {}
+            for key, value in eval_metrics.items():
+                wandb_eval_metrics[f"eval/{key}"] = value
+            self.wandb.log(wandb_eval_metrics, step=self.global_step)
+        
+        return eval_metrics
 
     def _log_metrics(self, loss: float, metrics: Dict[str, float], grad_norm: float):
-        """Log training metrics with WandB integration"""
+        """Log training metrics"""
         # Store metrics
         self.loss_history.append(loss)
-        if 'prediction_similarity' in metrics:
-            self.similarity_history.append(metrics['prediction_similarity'])
-        if 'eval_similarity' in metrics:
-            self.eval_similarity_history.append(metrics['eval_similarity'])
-        if 'sphere_violation' in metrics:
-            self.sphere_violation_history.append(metrics['sphere_violation'])
-        
-        # Task-specific similarity tracking
-        task_mode = metrics.get('task_mode', self.task_mode)
-        eval_sim = metrics.get('eval_similarity', metrics.get('prediction_similarity', 0))
-        
-        if task_mode == "eva_denoising":
-            self.eva_similarity_history.append(eval_sim)
-        elif task_mode == "clip_denoising":
-            self.clip_similarity_history.append(eval_sim)
-        
+        if 'velocity_similarity' in metrics:
+            self.similarity_history.append(metrics['velocity_similarity'])
         self.lr_history.append(self.optimizer.param_groups[0]['lr'])
         self.grad_norm_history.append(grad_norm)
         
         # Update best metrics
-        if eval_sim > self.best_eval_similarity:
-            self.best_eval_similarity = eval_sim
+        if 'velocity_similarity' in metrics:
+            if metrics['velocity_similarity'] > self.best_eval_similarity:
+                self.best_eval_similarity = metrics['velocity_similarity']
         
         if loss < self.best_loss:
             self.best_loss = loss
         
-        # WandB logging
-        if self.use_wandb:
-            wandb_metrics = {
+        # Prepare WandB metrics
+        wandb_metrics = {}
+        if self.wandb:
+            # Training metrics
+            wandb_metrics.update({
                 "train/loss": loss,
                 "train/grad_norm": grad_norm,
                 "train/learning_rate": self.optimizer.param_groups[0]['lr'],
-                "train/step": self.global_step,
                 "train/epoch": self.current_epoch,
-                "best/loss": self.best_loss,
-                "best/similarity": self.best_eval_similarity,
-            }
+                "train/step": self.global_step,
+                "train/best_loss": self.best_loss,
+            })
             
-            # Add prediction metrics
-            if 'prediction_similarity' in metrics:
-                wandb_metrics["train/prediction_similarity"] = metrics['prediction_similarity']
-            if 'eval_similarity' in metrics:
-                wandb_metrics["train/eval_similarity"] = metrics['eval_similarity']
-            if 'sphere_violation' in metrics:
-                wandb_metrics["train/sphere_violation"] = metrics['sphere_violation']
-                
-            # Add quality assessment
-            if 'quality_assessment' in metrics:
-                quality_map = {"excellent": 4, "good": 3, "fair": 2, "poor": 1, "unknown": 0}
-                wandb_metrics["train/quality_score"] = quality_map.get(metrics['quality_assessment'], 0)
+            # Loss function metrics
+            if metrics:
+                for key, value in metrics.items():
+                    if isinstance(value, (int, float)) and key != 'numerical_issue':
+                        wandb_metrics[f"train/{key}"] = value
             
-            # Add task-specific metrics
-            if task_mode == "eva_denoising":
-                wandb_metrics["eva/similarity"] = eval_sim
-            elif task_mode == "clip_denoising":
-                wandb_metrics["clip/similarity"] = eval_sim
+            # Gradient statistics
+            if len(self.grad_norm_history) >= 10:
+                recent_grads = list(self.grad_norm_history)[-10:]
+                wandb_metrics.update({
+                    "train/grad_norm_mean": np.mean(recent_grads),
+                    "train/grad_norm_std": np.std(recent_grads),
+                })
             
-            # Add dimensional info
-            if 'output_dim' in metrics:
-                wandb_metrics["model/output_dim"] = metrics['output_dim']
-            if 'conditioning_dim' in metrics:
-                wandb_metrics["model/conditioning_dim"] = metrics['conditioning_dim']
+            # Loss statistics
+            if len(self.loss_history) >= 10:
+                recent_losses = list(self.loss_history)[-10:]
+                wandb_metrics.update({
+                    "train/loss_mean": np.mean(recent_losses),
+                    "train/loss_std": np.std(recent_losses),
+                })
             
-            # Add norm tracking
-            for norm_key in ['pred_norm', 'target_norm', 'clean_norm', 'conditioning_norm']:
-                if norm_key in metrics:
-                    wandb_metrics[f"norms/{norm_key}"] = metrics[norm_key]
-            
-            # Add error analysis
-            if 'error_norm' in metrics:
-                wandb_metrics["train/error_norm"] = metrics['error_norm']
-            if 'relative_error' in metrics:
-                wandb_metrics["train/relative_error"] = metrics['relative_error']
-            
-            # Add flow matching specifics
-            if 'timestep_mean' in metrics:
-                wandb_metrics["flow/timestep_mean"] = metrics['timestep_mean']
-            if 'interpolation_weight' in metrics:
-                wandb_metrics["flow/interpolation_weight"] = metrics['interpolation_weight']
-            
-            # Mark overfitting test
-            if self.overfit_batch is not None:
-                wandb_metrics["overfit_test"] = 1
-            
-            wandb.log(wandb_metrics, step=self.global_step)
+            # Log to WandB
+            self.wandb.log(wandb_metrics, step=self.global_step)
         
         # Log to console
         if self.global_step % self.log_every_n_steps == 0:
-            task_name = "EVA" if task_mode == "eva_denoising" else "CLIP" if task_mode == "clip_denoising" else "UNK"
-            log_msg = f"Step {self.global_step} [{task_name}]: Loss={loss:.6f}"
+            log_msg = f"Step {self.global_step}: Loss={loss:.6f}"
             
-            if 'prediction_similarity' in metrics:
-                pred_sim = metrics['prediction_similarity']
-                eval_sim = metrics.get('eval_similarity', pred_sim)
+            if 'velocity_similarity' in metrics:
+                sim = metrics['velocity_similarity']
                 quality = metrics.get('quality_assessment', 'unknown')
-                log_msg += f", PredSim={pred_sim:.4f}, EvalSim={eval_sim:.4f} ({quality})"
-            
-            if 'sphere_violation' in metrics:
-                sphere_viol = metrics['sphere_violation']
-                log_msg += f", SphereViol={sphere_viol:.6f}"
-            
-            # Add dimensional info
-            if 'output_dim' in metrics:
-                out_dim = metrics['output_dim']
-                cond_dim = metrics.get('conditioning_dim', 'unknown')
-                log_msg += f", Dims={out_dim}|{cond_dim}"
+                log_msg += f", VelSim={sim:.4f} ({quality})"
             
             log_msg += f", GradNorm={grad_norm:.3f}"
             log_msg += f", LR={self.optimizer.param_groups[0]['lr']:.2e}"
@@ -708,63 +441,10 @@ class UniversalDenoisingTrainer:
             
             # Detailed logging in debug mode
             if self.debug_mode:
-                logger.info(f"  Detailed metrics for {task_mode}:")
+                logger.info(f"  Detailed metrics:")
                 for key, value in metrics.items():
                     if isinstance(value, (int, float)):
                         logger.info(f"    {key}: {value:.6f}")
-
-    def _log_evaluation_metrics(self, eval_metrics: Dict[str, float]):
-        """Log evaluation metrics to WandB"""
-        if not self.use_wandb or not eval_metrics:
-            return
-        
-        wandb_eval_metrics = {}
-        task_mode = eval_metrics.get('eval_task_mode', self.task_mode)
-        
-        # Log all evaluation metrics with proper prefixes
-        for key, value in eval_metrics.items():
-            if isinstance(value, (int, float)):
-                if key.startswith('eval_eva'):
-                    wandb_eval_metrics[f"eval_eva/{key.replace('eval_eva_', '')}"] = value
-                elif key.startswith('eval_clip'):
-                    wandb_eval_metrics[f"eval_clip/{key.replace('eval_clip_', '')}"] = value
-                else:
-                    wandb_eval_metrics[f"eval/{key}"] = value
-        
-        # Add summary metrics
-        if task_mode == "eva_denoising" and 'eval_eva_similarity' in eval_metrics:
-            main_sim = eval_metrics['eval_eva_similarity']
-            wandb_eval_metrics["eval/main_similarity"] = main_sim
-            
-            # Performance assessment
-            if main_sim > 0.8:
-                wandb_eval_metrics["eval/performance"] = "outstanding"
-            elif main_sim > 0.7:
-                wandb_eval_metrics["eval/performance"] = "excellent"
-            elif main_sim > 0.5:
-                wandb_eval_metrics["eval/performance"] = "good"
-            elif main_sim > 0.2:
-                wandb_eval_metrics["eval/performance"] = "fair"
-            else:
-                wandb_eval_metrics["eval/performance"] = "poor"
-                
-        elif task_mode == "clip_denoising" and 'eval_clip_similarity' in eval_metrics:
-            main_sim = eval_metrics['eval_clip_similarity']
-            wandb_eval_metrics["eval/main_similarity"] = main_sim
-            
-            # Performance assessment
-            if main_sim > 0.7:
-                wandb_eval_metrics["eval/performance"] = "outstanding"
-            elif main_sim > 0.6:
-                wandb_eval_metrics["eval/performance"] = "excellent"
-            elif main_sim > 0.4:
-                wandb_eval_metrics["eval/performance"] = "good"
-            elif main_sim > 0.15:
-                wandb_eval_metrics["eval/performance"] = "fair"
-            else:
-                wandb_eval_metrics["eval/performance"] = "poor"
-        
-        wandb.log(wandb_eval_metrics, step=self.global_step)
 
     def _save_checkpoint(self):
         """Save model checkpoint"""
@@ -778,12 +458,8 @@ class UniversalDenoisingTrainer:
             'current_epoch': self.current_epoch,
             'best_eval_similarity': self.best_eval_similarity,
             'best_loss': self.best_loss,
-            'task_mode': self.task_mode,
             'loss_history': list(self.loss_history),
             'similarity_history': list(self.similarity_history),
-            'eval_similarity_history': list(self.eval_similarity_history),
-            'eva_similarity_history': list(self.eva_similarity_history),
-            'clip_similarity_history': list(self.clip_similarity_history),
         }
         
         if self.scaler is not None:
@@ -792,38 +468,26 @@ class UniversalDenoisingTrainer:
         torch.save(checkpoint, checkpoint_path)
         logger.info(f"Checkpoint saved: {checkpoint_path}")
         
-        # Log checkpoint to WandB
-        if self.use_wandb:
-            wandb.save(str(checkpoint_path))
+        # Log checkpoint to WandB if available
+        if self.wandb:
+            self.wandb.log({
+                "checkpoint/step": self.global_step,
+                "checkpoint/path": str(checkpoint_path),
+                "checkpoint/best_similarity": self.best_eval_similarity
+            }, step=self.global_step)
 
     def train(self) -> Dict[str, Any]:
-        """Main training loop with comprehensive WandB tracking"""
-        task_info = self._get_task_info()
-        
-        logger.info(f"Starting {task_info['task']} training...")
+        """Main training loop"""
+        logger.info("Starting EVA reproduction training with WandB monitoring...")
         logger.info(f"  Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
-        
-        # Handle dataloader length safely
-        try:
-            steps_per_epoch = len(self.train_dataloader)
-            total_training_steps = steps_per_epoch * self.num_epochs
-            logger.info(f"  Training steps per epoch: {steps_per_epoch}")
-            logger.info(f"  Total training steps: {total_training_steps}")
-        except (TypeError, AttributeError):
-            logger.info(f"  Training steps per epoch: Unknown (IterableDataset)")
-            logger.info(f"  Total training steps: Estimated")
+        logger.info(f"  Training steps per epoch: {len(self.train_dataloader)}")
+        logger.info(f"  Total training steps: {len(self.train_dataloader) * self.num_epochs}")
         
         if self.overfit_batch is not None:
             logger.info(f"  OVERFITTING TEST MODE: Using {self.overfit_batch['batch_size']} samples")
         
-        # Log system information to WandB
-        if self.use_wandb:
-            system_info = {
-                "system/gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
-                "system/gpu_memory_gb": torch.cuda.get_device_properties(0).total_memory / 1e9 if torch.cuda.is_available() else 0,
-                "system/device": str(self.device),
-            }
-            wandb.log(system_info)
+        if self.wandb:
+            logger.info(f"  WandB monitoring: {self.wandb.url}")
         
         self.model.train()
         start_time = time.time()
@@ -858,48 +522,30 @@ class UniversalDenoisingTrainer:
                     epoch_steps += 1
                     self.global_step += 1
                     
-                    # Log step timing
-                    step_time = time.time() - step_start_time
-                    if self.use_wandb:
-                        wandb.log({"performance/step_time": step_time}, step=self.global_step)
-                    
-                    # Log metrics (includes WandB logging)
+                    # Log metrics
                     self._log_metrics(loss.item(), metrics or {}, grad_norm)
                     
                     # Run evaluation
                     if self.global_step % self.eval_every_n_steps == 0:
                         logger.info(f"Running evaluation at step {self.global_step}...")
-                        eval_start_time = time.time()
-                        
                         eval_metrics = self._evaluate()
                         
-                        eval_time = time.time() - eval_start_time
-                        if self.use_wandb:
-                            wandb.log({"performance/eval_time": eval_time}, step=self.global_step)
-                        
                         if eval_metrics:
-                            task_mode = eval_metrics.get('eval_task_mode', self.task_mode)
-                            metric_prefix = "eval_eva" if task_mode == "eva_denoising" else "eval_clip"
-                            
-                            logger.info(f"Evaluation results for {task_mode}:")
+                            logger.info(f"Evaluation results:")
                             for key, value in eval_metrics.items():
-                                if isinstance(value, (int, float)):
-                                    logger.info(f"  {key}: {value:.4f}")
-                                else:
-                                    logger.info(f"  {key}: {value}")
-                            
-                            # Log to WandB
-                            self._log_evaluation_metrics(eval_metrics)
+                                logger.info(f"  {key}: {value:.4f}")
                             
                             # Update best eval similarity
-                            main_sim_key = f'{metric_prefix}_similarity'
-                            if main_sim_key in eval_metrics and eval_metrics[main_sim_key] > self.best_eval_similarity:
-                                self.best_eval_similarity = eval_metrics[main_sim_key]
-                                logger.info(f"New best {task_mode} similarity: {self.best_eval_similarity:.4f}")
+                            if eval_metrics.get('eval_eva_similarity', 0) > self.best_eval_similarity:
+                                self.best_eval_similarity = eval_metrics['eval_eva_similarity']
+                                logger.info(f"New best EVA similarity: {self.best_eval_similarity:.4f}")
                                 
                                 # Log new best to WandB
-                                if self.use_wandb:
-                                    wandb.log({"best/new_best_similarity": self.best_eval_similarity}, step=self.global_step)
+                                if self.wandb:
+                                    self.wandb.log({
+                                        "best/eva_similarity": self.best_eval_similarity,
+                                        "best/step": self.global_step
+                                    }, step=self.global_step)
                     
                     # Save checkpoint
                     if self.global_step % self.save_every_n_steps == 0:
@@ -908,10 +554,13 @@ class UniversalDenoisingTrainer:
                     # Check for early success in overfitting test
                     if (self.overfit_batch is not None and 
                         metrics and 
-                        metrics.get('eval_similarity', 0) > 0.9):
+                        metrics.get('velocity_similarity', 0) > 0.9):
                         logger.info("🎉 OVERFITTING TEST PASSED! Model can learn effectively.")
-                        if self.use_wandb:
-                            wandb.log({"overfit_test/passed": True}, step=self.global_step)
+                        if self.wandb:
+                            self.wandb.log({
+                                "overfit_test/early_success": True,
+                                "overfit_test/success_step": self.global_step
+                            }, step=self.global_step)
                         break
                 
                 # End of epoch logging
@@ -921,30 +570,28 @@ class UniversalDenoisingTrainer:
                 logger.info(f"  Best loss: {self.best_loss:.6f}")
                 logger.info(f"  Best similarity: {self.best_eval_similarity:.4f}")
                 
-                # Log epoch summary to WandB
-                if self.use_wandb:
-                    epoch_metrics = {
+                # Log epoch metrics to WandB
+                if self.wandb:
+                    self.wandb.log({
                         "epoch/avg_loss": avg_epoch_loss,
-                        "epoch/steps": epoch_steps,
                         "epoch/number": epoch + 1,
-                    }
-                    wandb.log(epoch_metrics, step=self.global_step)
+                        "epoch/best_loss": self.best_loss,
+                        "epoch/best_similarity": self.best_eval_similarity
+                    }, step=self.global_step)
                 
                 # Early stopping for overfitting test
                 if (self.overfit_batch is not None and 
-                    len(self.eval_similarity_history) > 0 and 
-                    max(self.eval_similarity_history[-10:]) > 0.9):
+                    len(self.similarity_history) > 0 and 
+                    self.similarity_history[-1] > 0.9):
                     logger.info("Overfitting test completed successfully!")
                     break
         
         except KeyboardInterrupt:
             logger.info("Training interrupted by user")
-            if self.use_wandb:
-                wandb.log({"training/interrupted": True})
         except Exception as e:
             logger.error(f"Training failed with error: {e}")
-            if self.use_wandb:
-                wandb.log({"training/failed": True, "training/error": str(e)})
+            if self.wandb:
+                self.wandb.log({"error": str(e)}, step=self.global_step)
             raise
         
         finally:
@@ -957,27 +604,9 @@ class UniversalDenoisingTrainer:
             
             total_time = time.time() - start_time
             
-            # Log final performance to WandB
-            if self.use_wandb:
-                final_wandb_metrics = {
-                    "final/training_time": total_time,
-                    "final/total_steps": self.global_step,
-                    "final/best_loss": self.best_loss,
-                    "final/best_similarity": self.best_eval_similarity,
-                    "final/completed": True,
-                }
-                
-                if final_eval:
-                    for key, value in final_eval.items():
-                        if isinstance(value, (int, float)):
-                            final_wandb_metrics[f"final/{key}"] = value
-                
-                wandb.log(final_wandb_metrics, step=self.global_step)
-            
             # Training summary
             summary = {
                 'training_completed': True,
-                'task_mode': self.task_mode,
                 'total_time_seconds': total_time,
                 'total_steps': self.global_step,
                 'final_epoch': self.current_epoch,
@@ -986,16 +615,13 @@ class UniversalDenoisingTrainer:
                 'final_eval': final_eval,
                 'overfit_test': self.overfit_batch is not None,
                 'overfit_success': (self.overfit_batch is not None and 
-                                  len(self.eval_similarity_history) > 0 and 
-                                  max(self.eval_similarity_history) > 0.8),
+                                  len(self.similarity_history) > 0 and 
+                                  max(self.similarity_history) > 0.8),
                 'loss_history': list(self.loss_history),
                 'similarity_history': list(self.similarity_history),
-                'eval_similarity_history': list(self.eval_similarity_history),
-                'eva_similarity_history': list(self.eva_similarity_history),
-                'clip_similarity_history': list(self.clip_similarity_history),
                 'lr_history': list(self.lr_history),
                 'grad_norm_history': list(self.grad_norm_history),
-                'sphere_violation_history': list(self.sphere_violation_history),
+                'wandb_enabled': self.wandb is not None,
             }
             
             # Save training summary
@@ -1003,75 +629,51 @@ class UniversalDenoisingTrainer:
             with open(summary_path, 'w') as f:
                 json.dump(summary, f, indent=2)
             
-            logger.info(f"{task_info['task']} training completed!")
+            # Log final summary to WandB
+            if self.wandb:
+                # Final metrics
+                final_wandb_metrics = {
+                    "final/total_time_minutes": total_time / 60,
+                    "final/total_steps": self.global_step,
+                    "final/best_loss": self.best_loss,
+                    "final/best_eva_similarity": self.best_eval_similarity,
+                    "final/overfit_success": summary['overfit_success'],
+                }
+                
+                # Add final evaluation metrics
+                if final_eval:
+                    for key, value in final_eval.items():
+                        final_wandb_metrics[f"final/{key}"] = value
+                
+                self.wandb.log(final_wandb_metrics, step=self.global_step)
+                
+                # Save summary as artifact
+                artifact = self.wandb.Artifact(f"training_summary_{self.wandb.id}", type="summary")
+                artifact.add_file(str(summary_path))
+                self.wandb.log_artifact(artifact)
+            
+            logger.info("Training completed!")
             logger.info(f"  Total time: {total_time:.1f} seconds")
             logger.info(f"  Total steps: {self.global_step}")
             logger.info(f"  Best loss: {self.best_loss:.6f}")
-            logger.info(f"  Best similarity: {self.best_eval_similarity:.4f}")
+            logger.info(f"  Best EVA similarity: {self.best_eval_similarity:.4f}")
             
             if final_eval:
-                task_mode = final_eval.get('eval_task_mode', self.task_mode)
-                metric_prefix = "eval_eva" if task_mode == "eva_denoising" else "eval_clip"
-                main_sim_key = f'{metric_prefix}_similarity'
-                
-                if main_sim_key in final_eval:
-                    final_sim = final_eval[main_sim_key]
-                    logger.info(f"  Final {task_mode} evaluation:")
-                    for key, value in final_eval.items():
-                        logger.info(f"    {key}: {value:.4f}")
-                    
-                    # Success assessment
-                    if task_mode == "eva_denoising":
-                        if final_sim > 0.8:
-                            logger.info("🎉 OUTSTANDING SUCCESS! EVA similarity > 0.8")
-                        elif final_sim > 0.7:
-                            logger.info("🎊 EXCELLENT SUCCESS! EVA similarity > 0.7")
-                        elif final_sim > 0.5:
-                            logger.info("✅ GOOD SUCCESS! EVA similarity > 0.5")
-                        else:
-                            logger.info(f"📈 Progress made: EVA similarity = {final_sim:.4f}")
-                    
-                    elif task_mode == "clip_denoising":
-                        if final_sim > 0.7:
-                            logger.info("🎉 OUTSTANDING SUCCESS! CLIP similarity > 0.7")
-                        elif final_sim > 0.6:
-                            logger.info("🎊 EXCELLENT SUCCESS! CLIP similarity > 0.6")
-                        elif final_sim > 0.4:
-                            logger.info("✅ GOOD SUCCESS! CLIP similarity > 0.4")
-                        else:
-                            logger.info(f"📈 Progress made: CLIP similarity = {final_sim:.4f}")
+                logger.info(f"  Final evaluation:")
+                for key, value in final_eval.items():
+                    logger.info(f"    {key}: {value:.4f}")
             
-            # Overfitting test results
             if self.overfit_batch is not None:
-                overfit_success = summary['overfit_success']
-                logger.info(f"🧪 OVERFITTING TEST: {'✅ PASSED' if overfit_success else '❌ FAILED'}")
-                if overfit_success:
-                    logger.info("   ✅ Model can learn and memorize - architecture is working perfectly!")
-                else:
-                    logger.info("   ⚠️ Model struggles to overfit - may need hyperparameter tuning")
+                success = summary['overfit_success']
+                logger.info(f"  Overfitting test: {'✅ PASSED' if success else '❌ FAILED'}")
             
-            # Finish WandB run
-            if self.use_wandb:
-                if final_eval:
-                    # Create a final summary table
-                    table_data = []
-                    for key, value in final_eval.items():
-                        if isinstance(value, (int, float)):
-                            table_data.append([key, value])
-                    
-                    table = wandb.Table(columns=["Metric", "Value"], data=table_data)
-                    wandb.log({"final_evaluation_table": table})
-                
-                # Log the final model
-                wandb.save(str(summary_path))
-                
-                logger.info(f"✅ WandB run completed: {wandb.run.url}")
-                wandb.finish()
+            if self.wandb:
+                logger.info(f"  WandB run: {self.wandb.url}")
             
             return summary
 
 
-def create_universal_trainer(
+def create_eva_trainer_with_wandb(
     model,
     loss_fn,
     train_dataloader,
@@ -1079,18 +681,14 @@ def create_universal_trainer(
     learning_rate: float = 1e-4,
     num_epochs: int = 10,
     output_dir: str = "./checkpoints",
-    task_mode: Optional[str] = None,
     overfit_test_size: Optional[int] = None,
     debug_mode: bool = False,
-    use_wandb: bool = True,
-    wandb_project: str = "blip3o-universal-denoising",
-    wandb_run_name: Optional[str] = None,
-    wandb_tags: Optional[List[str]] = None,
+    wandb_instance=None,
     **kwargs
-) -> UniversalDenoisingTrainer:
-    """Factory function to create universal trainer with WandB support"""
+) -> BLIP3oEVATrainerWithWandB:
+    """Factory function to create EVA trainer with WandB integration"""
     
-    return UniversalDenoisingTrainer(
+    return BLIP3oEVATrainerWithWandB(
         model=model,
         loss_fn=loss_fn,
         train_dataloader=train_dataloader,
@@ -1098,27 +696,8 @@ def create_universal_trainer(
         learning_rate=learning_rate,
         num_epochs=num_epochs,
         output_dir=output_dir,
-        task_mode=task_mode,
         overfit_test_size=overfit_test_size,
         debug_mode=debug_mode,
-        use_wandb=use_wandb,
-        wandb_project=wandb_project,
-        wandb_run_name=wandb_run_name,
-        wandb_tags=wandb_tags,
+        wandb_instance=wandb_instance,
         **kwargs
     )
-
-
-# Backward compatibility aliases
-def create_spherical_eva_trainer(*args, **kwargs):
-    """Backward compatibility: create EVA denoising trainer"""
-    kwargs['task_mode'] = 'eva_denoising'
-    return create_universal_trainer(*args, **kwargs)
-
-def create_clip_denoising_trainer(*args, **kwargs):
-    """NEW: Create CLIP denoising trainer"""
-    kwargs['task_mode'] = 'clip_denoising'
-    return create_universal_trainer(*args, **kwargs)
-
-# Legacy alias
-SphericalEVATrainer = UniversalDenoisingTrainer

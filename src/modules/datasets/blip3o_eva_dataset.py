@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Enhanced BLIP3-o Dataset - Support for Both EVA and CLIP Denoising
-Key features:
-1. EVA Denoising: Input/Target EVA [4096], Conditioning EVA [4096]
-2. CLIP Denoising: Input/Target CLIP [1024], Conditioning EVA [4096]
-3. Flexible spherical data handling for both modalities
-4. Proper flow matching setup for different embedding types
+Fixed BLIP3-o Dataset for EVA-CLIP Reproduction
+Key fixes:
+1. Proper data loading and validation
+2. Correct collate function for flow matching
+3. Better error handling and normalization
+4. Clear input/output handling
+5. Fixed tensor naming for compatibility
 """
 
 import torch
@@ -20,34 +21,29 @@ import random
 import time
 import gc
 import torch.nn.functional as F
-import math
 
 logger = logging.getLogger(__name__)
 
 
-class UniversalDenoisingDataset(IterableDataset):
+class BLIP3oEVAReproductionDataset(IterableDataset):
     """
-    Universal dataset for both EVA and CLIP denoising with proper spherical data handling
+    Fixed dataset for EVA-CLIP reproduction with proper data handling
     
-    Modes:
-    1. EVA Denoising: Takes clean EVA as TARGET and CONDITIONING, creates noisy EVA for INPUT
-    2. CLIP Denoising: Takes clean CLIP as TARGET and INPUT, uses clean EVA as CONDITIONING
+    This dataset loads:
+    - EVA embeddings [B, N, 4096] as TARGET (what we want to reproduce)
+    - CLIP embeddings [B, N, 1024] as CONDITIONING (guidance)
     """
     
     def __init__(
         self,
         chunked_embeddings_dir: Union[str, Path],
-        task_mode: str = "eva_denoising",  # "eva_denoising" or "clip_denoising"
         split: str = "train",
         training_mode: str = "patch_only",
+        normalize_embeddings: bool = True,
         max_shards: Optional[int] = None,
         shuffle_shards: bool = True,
         shuffle_within_shard: bool = True,
         expected_tokens: Optional[int] = None,
-        # Spherical noise parameters
-        noise_schedule: str = "uniform",
-        max_noise_level: float = 0.9,
-        min_noise_level: float = 0.1,
         # Error handling
         skip_corrupted: bool = True,
         validate_shapes: bool = True,
@@ -56,20 +52,15 @@ class UniversalDenoisingDataset(IterableDataset):
         super().__init__()
         
         self.chunked_embeddings_dir = Path(chunked_embeddings_dir)
-        self.task_mode = task_mode
         self.split = split
         self.training_mode = training_mode
+        self.normalize_embeddings = normalize_embeddings
         self.max_shards = max_shards
         self.shuffle_shards = shuffle_shards
         self.shuffle_within_shard = shuffle_within_shard
         self.skip_corrupted = skip_corrupted
         self.validate_shapes = validate_shapes
         self.max_retries = max_retries
-        
-        # Spherical noise parameters
-        self.noise_schedule = noise_schedule
-        self.max_noise_level = max_noise_level
-        self.min_noise_level = min_noise_level
         
         # Determine expected tokens
         if expected_tokens is None:
@@ -79,10 +70,6 @@ class UniversalDenoisingDataset(IterableDataset):
         
         # Setup random state
         self.rng = random.Random(42)
-        
-        # Validate task mode
-        if task_mode not in ["eva_denoising", "clip_denoising"]:
-            raise ValueError(f"task_mode must be 'eva_denoising' or 'clip_denoising', got {task_mode}")
         
         # Load manifest and prepare shards
         self._load_manifest()
@@ -94,23 +81,13 @@ class UniversalDenoisingDataset(IterableDataset):
         self.current_sample_idx = 0
         self.total_samples_processed = 0
         
-        # Log task configuration
-        if task_mode == "eva_denoising":
-            logger.info(f"EVA Denoising Dataset initialized:")
-            logger.info(f"  INPUT: Noisy EVA embeddings [B, N, 4096]")
-            logger.info(f"  CONDITIONING: Clean EVA embeddings [B, N, 4096]")
-            logger.info(f"  TARGET: Clean EVA embeddings [B, N, 4096]")
-        elif task_mode == "clip_denoising":
-            logger.info(f"CLIP Denoising Dataset initialized:")
-            logger.info(f"  INPUT: Noisy CLIP embeddings [B, N, 1024]")
-            logger.info(f"  CONDITIONING: Clean EVA embeddings [B, N, 4096]")
-            logger.info(f"  TARGET: Clean CLIP embeddings [B, N, 1024]")
-        
+        logger.info(f"EVA Reproduction Dataset initialized:")
         logger.info(f"  Directory: {self.chunked_embeddings_dir}")
         logger.info(f"  Mode: {self.training_mode} ({self.expected_tokens} tokens)")
-        logger.info(f"  Noise schedule: {self.noise_schedule}")
-        logger.info(f"  Noise range: [{self.min_noise_level}, {self.max_noise_level}]")
-        logger.info(f"  Shards: {len(self.shard_files) if hasattr(self, 'shard_files') else 'Loading...'}")
+        logger.info(f"  TARGET: EVA embeddings [B, N, 4096]")
+        logger.info(f"  CONDITIONING: CLIP embeddings [B, N, 1024]")
+        logger.info(f"  Normalize: {self.normalize_embeddings}")
+        logger.info(f"  Shards: {len(self.shard_files)}")
 
     def _load_manifest(self):
         """Load embeddings manifest"""
@@ -130,7 +107,7 @@ class UniversalDenoisingDataset(IterableDataset):
 
     def _prepare_shard_list(self):
         """Prepare list of shard files"""
-        # Look for shard files with different patterns
+        # Look for shard files
         mode_suffix = "cls_patch" if self.training_mode == "cls_patch" else "patch_only"
         patterns = [
             f"embeddings_shard_*_{mode_suffix}.pkl",
@@ -187,192 +164,92 @@ class UniversalDenoisingDataset(IterableDataset):
                 time.sleep(0.1)
 
     def _validate_and_process_shard(self, shard_data: Dict[str, Any], shard_path: Path):
-        """Validate and process shard data for both EVA and CLIP modes"""
-        # Check required keys based on task mode
-        if self.task_mode == "eva_denoising":
-            required_keys = ['eva_blip3o_embeddings', 'captions']
-            if 'eva_blip3o_embeddings' not in shard_data:
-                raise ValueError(f"Missing EVA embeddings in shard {shard_path}")
-        elif self.task_mode == "clip_denoising":
-            required_keys = ['clip_blip3o_embeddings', 'eva_blip3o_embeddings', 'captions']
-            if 'clip_blip3o_embeddings' not in shard_data:
-                raise ValueError(f"Missing CLIP embeddings in shard {shard_path}")
-            if 'eva_blip3o_embeddings' not in shard_data:
-                raise ValueError(f"Missing EVA embeddings in shard {shard_path}")
-        
+        """Validate and process shard data"""
+        # Check required keys
+        required_keys = ['clip_blip3o_embeddings', 'eva_blip3o_embeddings', 'captions']
         for key in required_keys:
             if key not in shard_data:
                 raise ValueError(f"Missing key '{key}' in shard {shard_path}")
         
-        # Get and validate embeddings based on task mode
-        if self.task_mode == "eva_denoising":
-            eva_emb = shard_data['eva_blip3o_embeddings']
-            
-            # Convert to tensors if needed
-            if not torch.is_tensor(eva_emb):
-                eva_emb = torch.tensor(eva_emb, dtype=torch.float32)
-                shard_data['eva_blip3o_embeddings'] = eva_emb
-            
-            # Validate shapes
-            if self.validate_shapes:
-                if eva_emb.dim() != 3:
-                    raise ValueError(f"Expected 3D tensor for EVA, got: {eva_emb.shape}")
-                if eva_emb.shape[2] != 4096:
-                    raise ValueError(f"Expected EVA dim 4096, got: {eva_emb.shape[2]}")
+        # Get embeddings
+        clip_emb = shard_data['clip_blip3o_embeddings']
+        eva_emb = shard_data['eva_blip3o_embeddings']
         
-        elif self.task_mode == "clip_denoising":
-            clip_emb = shard_data['clip_blip3o_embeddings']
-            eva_emb = shard_data['eva_blip3o_embeddings']
-            
-            # Convert to tensors if needed
-            if not torch.is_tensor(clip_emb):
-                clip_emb = torch.tensor(clip_emb, dtype=torch.float32)
-                shard_data['clip_blip3o_embeddings'] = clip_emb
-            if not torch.is_tensor(eva_emb):
-                eva_emb = torch.tensor(eva_emb, dtype=torch.float32)
-                shard_data['eva_blip3o_embeddings'] = eva_emb
-            
-            # Validate shapes
-            if self.validate_shapes:
-                if clip_emb.dim() != 3:
-                    raise ValueError(f"Expected 3D tensor for CLIP, got: {clip_emb.shape}")
-                if eva_emb.dim() != 3:
-                    raise ValueError(f"Expected 3D tensor for EVA, got: {eva_emb.shape}")
-                if clip_emb.shape[2] != 1024:
-                    raise ValueError(f"Expected CLIP dim 1024, got: {clip_emb.shape[2]}")
-                if eva_emb.shape[2] != 4096:
-                    raise ValueError(f"Expected EVA dim 4096, got: {eva_emb.shape[2]}")
-                if clip_emb.shape[0] != eva_emb.shape[0]:
-                    raise ValueError(f"Batch size mismatch: CLIP {clip_emb.shape[0]} vs EVA {eva_emb.shape[0]}")
-                if clip_emb.shape[1] != eva_emb.shape[1]:
-                    raise ValueError(f"Token count mismatch: CLIP {clip_emb.shape[1]} vs EVA {eva_emb.shape[1]}")
+        # Convert to tensors if needed
+        if not torch.is_tensor(clip_emb):
+            clip_emb = torch.tensor(clip_emb, dtype=torch.float32)
+            shard_data['clip_blip3o_embeddings'] = clip_emb
+        if not torch.is_tensor(eva_emb):
+            eva_emb = torch.tensor(eva_emb, dtype=torch.float32)
+            shard_data['eva_blip3o_embeddings'] = eva_emb
         
-        # Handle token count adaptation for both embeddings
-        if self.task_mode == "eva_denoising":
-            eva_emb = shard_data['eva_blip3o_embeddings']
-            current_tokens = eva_emb.shape[1]
+        # Validate shapes
+        if self.validate_shapes:
+            if clip_emb.dim() != 3 or eva_emb.dim() != 3:
+                raise ValueError(f"Expected 3D tensors, got CLIP: {clip_emb.shape}, EVA: {eva_emb.shape}")
             
-            if current_tokens != self.expected_tokens:
-                logger.debug(f"Adapting EVA from {current_tokens} to {self.expected_tokens} tokens")
-                shard_data['eva_blip3o_embeddings'] = self._adapt_token_count(eva_emb, current_tokens)
-        
-        elif self.task_mode == "clip_denoising":
-            clip_emb = shard_data['clip_blip3o_embeddings']
-            eva_emb = shard_data['eva_blip3o_embeddings']
-            current_tokens = clip_emb.shape[1]
+            if clip_emb.shape[0] != eva_emb.shape[0]:
+                raise ValueError(f"Batch size mismatch: CLIP {clip_emb.shape[0]} vs EVA {eva_emb.shape[0]}")
             
-            if current_tokens != self.expected_tokens:
-                logger.debug(f"Adapting both embeddings from {current_tokens} to {self.expected_tokens} tokens")
-                shard_data['clip_blip3o_embeddings'] = self._adapt_token_count(clip_emb, current_tokens)
-                shard_data['eva_blip3o_embeddings'] = self._adapt_token_count(eva_emb, current_tokens)
+            clip_tokens, eva_tokens = clip_emb.shape[1], eva_emb.shape[1]
+            if clip_tokens != eva_tokens:
+                raise ValueError(f"Token count mismatch: CLIP {clip_tokens} vs EVA {eva_tokens}")
         
-        # Apply normalization
-        shard_data = self._normalize_embeddings(shard_data)
-
-    def _adapt_token_count(self, embeddings: torch.Tensor, current_tokens: int) -> torch.Tensor:
-        """Adapt token count for embeddings"""
-        if current_tokens == 256 and self.expected_tokens == 257:
-            # Add CLS token (average of patches)
-            cls_token = embeddings.mean(dim=1, keepdim=True)
-            return torch.cat([cls_token, embeddings], dim=1)
-        elif current_tokens == 257 and self.expected_tokens == 256:
-            # Remove CLS token
-            return embeddings[:, 1:, :]
-        else:
-            raise ValueError(f"Cannot adapt from {current_tokens} to {self.expected_tokens} tokens")
+        # Handle token count adaptation
+        current_tokens = clip_emb.shape[1]
+        if current_tokens != self.expected_tokens:
+            logger.debug(f"Adapting from {current_tokens} to {self.expected_tokens} tokens")
+            
+            if current_tokens == 256 and self.expected_tokens == 257:
+                # Add CLS token (average of patches)
+                clip_cls = clip_emb.mean(dim=1, keepdim=True)
+                eva_cls = eva_emb.mean(dim=1, keepdim=True)
+                shard_data['clip_blip3o_embeddings'] = torch.cat([clip_cls, clip_emb], dim=1)
+                shard_data['eva_blip3o_embeddings'] = torch.cat([eva_cls, eva_emb], dim=1)
+            elif current_tokens == 257 and self.expected_tokens == 256:
+                # Remove CLS token
+                shard_data['clip_blip3o_embeddings'] = clip_emb[:, 1:, :]
+                shard_data['eva_blip3o_embeddings'] = eva_emb[:, 1:, :]
+            else:
+                raise ValueError(f"Cannot adapt from {current_tokens} to {self.expected_tokens} tokens")
+        
+        # Apply normalization if requested
+        if self.normalize_embeddings:
+            shard_data = self._normalize_embeddings(shard_data)
 
     def _normalize_embeddings(self, shard_data: Dict[str, Any]) -> Dict[str, Any]:
         """Apply L2 normalization to embeddings"""
+        clip_emb = shard_data['clip_blip3o_embeddings']
+        eva_emb = shard_data['eva_blip3o_embeddings']
+        
+        # Check for NaN/Inf
+        if torch.isnan(clip_emb).any() or torch.isinf(clip_emb).any():
+            logger.warning("Found NaN/Inf in CLIP embeddings")
+            clip_emb = torch.nan_to_num(clip_emb, nan=0.0, posinf=1.0, neginf=-1.0)
+        
+        if torch.isnan(eva_emb).any() or torch.isinf(eva_emb).any():
+            logger.warning("Found NaN/Inf in EVA embeddings")
+            eva_emb = torch.nan_to_num(eva_emb, nan=0.0, posinf=1.0, neginf=-1.0)
+        
+        # Apply L2 normalization
         eps = 1e-8
+        clip_normalized = F.normalize(clip_emb + eps, p=2, dim=-1)
+        eva_normalized = F.normalize(eva_emb + eps, p=2, dim=-1)
         
-        if self.task_mode == "eva_denoising":
-            eva_emb = shard_data['eva_blip3o_embeddings']
-            
-            # Check for NaN/Inf
-            if torch.isnan(eva_emb).any() or torch.isinf(eva_emb).any():
-                logger.warning("Found NaN/Inf in EVA embeddings")
-                eva_emb = torch.nan_to_num(eva_emb, nan=0.0, posinf=1.0, neginf=-1.0)
-            
-            # Apply L2 normalization
-            eva_normalized = F.normalize(eva_emb + eps, p=2, dim=-1)
-            eva_norm = torch.norm(eva_normalized, dim=-1).mean().item()
-            
-            if abs(eva_norm - 1.0) > 0.1:
-                logger.warning(f"EVA normalization may have failed: norm = {eva_norm:.3f}")
-            
-            shard_data['eva_blip3o_embeddings'] = eva_normalized
+        # Check normalization
+        clip_norm = torch.norm(clip_normalized, dim=-1).mean().item()
+        eva_norm = torch.norm(eva_normalized, dim=-1).mean().item()
         
-        elif self.task_mode == "clip_denoising":
-            clip_emb = shard_data['clip_blip3o_embeddings']
-            eva_emb = shard_data['eva_blip3o_embeddings']
-            
-            # Check for NaN/Inf in both
-            if torch.isnan(clip_emb).any() or torch.isinf(clip_emb).any():
-                logger.warning("Found NaN/Inf in CLIP embeddings")
-                clip_emb = torch.nan_to_num(clip_emb, nan=0.0, posinf=1.0, neginf=-1.0)
-            
-            if torch.isnan(eva_emb).any() or torch.isinf(eva_emb).any():
-                logger.warning("Found NaN/Inf in EVA embeddings")
-                eva_emb = torch.nan_to_num(eva_emb, nan=0.0, posinf=1.0, neginf=-1.0)
-            
-            # Apply L2 normalization to both
-            clip_normalized = F.normalize(clip_emb + eps, p=2, dim=-1)
-            eva_normalized = F.normalize(eva_emb + eps, p=2, dim=-1)
-            
-            # Verify normalization
-            clip_norm = torch.norm(clip_normalized, dim=-1).mean().item()
-            eva_norm = torch.norm(eva_normalized, dim=-1).mean().item()
-            
-            if abs(clip_norm - 1.0) > 0.1:
-                logger.warning(f"CLIP normalization may have failed: norm = {clip_norm:.3f}")
-            if abs(eva_norm - 1.0) > 0.1:
-                logger.warning(f"EVA normalization may have failed: norm = {eva_norm:.3f}")
-            
-            shard_data['clip_blip3o_embeddings'] = clip_normalized
-            shard_data['eva_blip3o_embeddings'] = eva_normalized
+        if abs(clip_norm - 1.0) > 0.1:
+            logger.warning(f"CLIP normalization may have failed: norm = {clip_norm:.3f}")
+        if abs(eva_norm - 1.0) > 0.1:
+            logger.warning(f"EVA normalization may have failed: norm = {eva_norm:.3f}")
         
+        shard_data['clip_blip3o_embeddings'] = clip_normalized
+        shard_data['eva_blip3o_embeddings'] = eva_normalized
         shard_data['normalization_applied'] = True
+        
         return shard_data
-
-    def _add_spherical_noise(self, clean_embeddings: torch.Tensor, noise_level: float) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Add spherical noise to embeddings using slerp"""
-        device = clean_embeddings.device
-        dtype = clean_embeddings.dtype
-        
-        # Generate random noise on sphere
-        noise = torch.randn_like(clean_embeddings, device=device, dtype=dtype)
-        noise = F.normalize(noise, p=2, dim=-1)
-        
-        # Spherical linear interpolation (slerp)
-        cos_angle = torch.sum(clean_embeddings * noise, dim=-1, keepdim=True)
-        cos_angle = torch.clamp(cos_angle, -1 + 1e-7, 1 - 1e-7)
-        angle = torch.acos(cos_angle)
-        
-        # Avoid division by zero
-        sin_angle = torch.sin(angle)
-        sin_angle = torch.clamp(sin_angle, min=1e-7)
-        
-        # Slerp formula
-        clean_weight = torch.sin((1 - noise_level) * angle) / sin_angle
-        noise_weight = torch.sin(noise_level * angle) / sin_angle
-        
-        noisy_embeddings = clean_weight * clean_embeddings + noise_weight * noise
-        
-        # Ensure result is on unit sphere
-        noisy_embeddings = F.normalize(noisy_embeddings, p=2, dim=-1)
-        
-        return noisy_embeddings, noise
-
-    def _sample_noise_level(self) -> float:
-        """Sample noise level based on schedule"""
-        if self.noise_schedule == "uniform":
-            return self.rng.uniform(self.min_noise_level, self.max_noise_level)
-        elif self.noise_schedule == "cosine":
-            u = self.rng.uniform(0, 1)
-            t = 0.5 * (1 + math.cos(u * math.pi))
-            return self.min_noise_level + t * (self.max_noise_level - self.min_noise_level)
-        else:
-            raise ValueError(f"Unknown noise schedule: {self.noise_schedule}")
 
     def _load_next_shard(self) -> bool:
         """Load next shard"""
@@ -394,11 +271,7 @@ class UniversalDenoisingDataset(IterableDataset):
             
             if self.current_shard_data is not None:
                 # Prepare samples
-                if self.task_mode == "eva_denoising":
-                    num_samples = self.current_shard_data['eva_blip3o_embeddings'].shape[0]
-                elif self.task_mode == "clip_denoising":
-                    num_samples = self.current_shard_data['clip_blip3o_embeddings'].shape[0]
-                
+                num_samples = self.current_shard_data['clip_blip3o_embeddings'].shape[0]
                 self.current_samples = list(range(num_samples))
                 
                 if self.shuffle_within_shard:
@@ -416,34 +289,6 @@ class UniversalDenoisingDataset(IterableDataset):
         self.current_shard_data = None
         return False
 
-    def __len__(self) -> int:
-        """Estimate total number of samples"""
-        if hasattr(self, '_estimated_length'):
-            return self._estimated_length
-        
-        # Try to estimate from manifest
-        if hasattr(self, 'manifest') and 'total_samples' in self.manifest:
-            manifest_samples = self.manifest['total_samples']
-            if self.max_shards is not None:
-                total_shards = self.manifest.get('total_shards', len(self.shard_files))
-                if total_shards > 0:
-                    estimated_samples = int(manifest_samples * self.max_shards / total_shards)
-                    self._estimated_length = estimated_samples
-                    return estimated_samples
-            else:
-                self._estimated_length = manifest_samples
-                return manifest_samples
-        
-        # Fallback estimate
-        num_shards = len(self.shard_files) if hasattr(self, 'shard_files') else 1
-        avg_samples_per_shard = 1000
-        
-        estimated_samples = num_shards * avg_samples_per_shard
-        self._estimated_length = estimated_samples
-        
-        logger.debug(f"Estimated dataset length: {estimated_samples} samples from {num_shards} shards")
-        return estimated_samples
-
     def __iter__(self) -> Iterator[Dict[str, Any]]:
         """Iterate through all samples"""
         self.current_shard_idx = 0
@@ -451,7 +296,7 @@ class UniversalDenoisingDataset(IterableDataset):
         self.current_sample_idx = 0
         self.total_samples_processed = 0
         
-        logger.debug(f"Starting iteration over {len(self.shard_files)} shards for {self.task_mode}")
+        logger.debug(f"Starting iteration over {len(self.shard_files)} shards")
         
         if not self._load_next_shard():
             return
@@ -461,93 +306,37 @@ class UniversalDenoisingDataset(IterableDataset):
                 try:
                     sample_idx = self.current_samples[self.current_sample_idx]
                     
-                    # Extract embeddings based on task mode
-                    if self.task_mode == "eva_denoising":
-                        clean_eva = self.current_shard_data['eva_blip3o_embeddings'][sample_idx]
-                        caption = self.current_shard_data['captions'][sample_idx]
-                        
-                        # Validation
-                        if self.validate_shapes:
-                            if clean_eva.shape != (self.expected_tokens, 4096):
-                                raise ValueError(f"Invalid EVA shape: {clean_eva.shape}")
-                        
-                        # Check for NaN/Inf
-                        if torch.isnan(clean_eva).any():
-                            if self.skip_corrupted:
-                                self.current_sample_idx += 1
-                                continue
-                            else:
-                                raise ValueError("NaN detected in EVA embeddings")
-                        
-                        # Sample noise level and add noise
-                        noise_level = self._sample_noise_level()
-                        noisy_eva, noise = self._add_spherical_noise(clean_eva, noise_level)
-                        
-                        # Create sample item for EVA denoising
-                        item = {
-                            # Model inputs
-                            'input_embeddings': noisy_eva,         # [N, 4096] - Noisy EVA input
-                            'conditioning_embeddings': clean_eva,  # [N, 4096] - Clean EVA conditioning
-                            'target_embeddings': clean_eva,        # [N, 4096] - Clean EVA target
-                            'noise': noise,                        # [N, 4096] - Pure noise used
-                            'noise_level': noise_level,            # scalar - Noise mixing ratio
-                            'caption': caption,
-                            
-                            # Metadata
-                            'task_mode': 'eva_denoising',
-                            'key': f"shard_{self.current_shard_idx-1}_sample_{sample_idx}",
-                            'sample_idx': sample_idx,
-                            'training_mode': self.training_mode,
-                            'num_tokens': self.expected_tokens,
-                            'input_dim': 4096,
-                            'output_dim': 4096,
-                            'conditioning_dim': 4096,
-                        }
+                    # Extract sample data
+                    clip_emb = self.current_shard_data['clip_blip3o_embeddings'][sample_idx]
+                    eva_emb = self.current_shard_data['eva_blip3o_embeddings'][sample_idx]
+                    caption = self.current_shard_data['captions'][sample_idx]
                     
-                    elif self.task_mode == "clip_denoising":
-                        clean_clip = self.current_shard_data['clip_blip3o_embeddings'][sample_idx]
-                        clean_eva = self.current_shard_data['eva_blip3o_embeddings'][sample_idx]
-                        caption = self.current_shard_data['captions'][sample_idx]
-                        
-                        # Validation
-                        if self.validate_shapes:
-                            if clean_clip.shape != (self.expected_tokens, 1024):
-                                raise ValueError(f"Invalid CLIP shape: {clean_clip.shape}")
-                            if clean_eva.shape != (self.expected_tokens, 4096):
-                                raise ValueError(f"Invalid EVA shape: {clean_eva.shape}")
-                        
-                        # Check for NaN/Inf
-                        if torch.isnan(clean_clip).any() or torch.isnan(clean_eva).any():
-                            if self.skip_corrupted:
-                                self.current_sample_idx += 1
-                                continue
-                            else:
-                                raise ValueError("NaN detected in embeddings")
-                        
-                        # Sample noise level and add noise to CLIP
-                        noise_level = self._sample_noise_level()
-                        noisy_clip, noise = self._add_spherical_noise(clean_clip, noise_level)
-                        
-                        # Create sample item for CLIP denoising
-                        item = {
-                            # Model inputs
-                            'input_embeddings': noisy_clip,        # [N, 1024] - Noisy CLIP input
-                            'conditioning_embeddings': clean_eva,  # [N, 4096] - Clean EVA conditioning
-                            'target_embeddings': clean_clip,       # [N, 1024] - Clean CLIP target
-                            'noise': noise,                        # [N, 1024] - Pure noise used
-                            'noise_level': noise_level,            # scalar - Noise mixing ratio
-                            'caption': caption,
-                            
-                            # Metadata
-                            'task_mode': 'clip_denoising',
-                            'key': f"shard_{self.current_shard_idx-1}_sample_{sample_idx}",
-                            'sample_idx': sample_idx,
-                            'training_mode': self.training_mode,
-                            'num_tokens': self.expected_tokens,
-                            'input_dim': 1024,
-                            'output_dim': 1024,
-                            'conditioning_dim': 4096,
-                        }
+                    # Final validation
+                    if self.validate_shapes:
+                        if clip_emb.shape != (self.expected_tokens, 1024):
+                            raise ValueError(f"Invalid CLIP shape: {clip_emb.shape}")
+                        if eva_emb.shape != (self.expected_tokens, 4096):
+                            raise ValueError(f"Invalid EVA shape: {eva_emb.shape}")
+                    
+                    # Check for NaN/Inf
+                    if torch.isnan(clip_emb).any() or torch.isnan(eva_emb).any():
+                        if self.skip_corrupted:
+                            self.current_sample_idx += 1
+                            continue
+                        else:
+                            raise ValueError("NaN detected in embeddings")
+                    
+                    # Create sample item for EVA reproduction
+                    item = {
+                        'clip_embeddings': clip_emb,  # [N, 1024] - CONDITIONING
+                        'eva_embeddings': eva_emb,    # [N, 4096] - TARGET to reproduce
+                        'caption': caption,
+                        'key': f"shard_{self.current_shard_idx-1}_sample_{sample_idx}",
+                        'sample_idx': sample_idx,
+                        'training_mode': self.training_mode,
+                        'num_tokens': self.expected_tokens,
+                        'normalized': self.current_shard_data.get('normalization_applied', False),
+                    }
                     
                     self.current_sample_idx += 1
                     self.total_samples_processed += 1
@@ -568,9 +357,16 @@ class UniversalDenoisingDataset(IterableDataset):
         logger.info(f"Iteration completed: {self.total_samples_processed} samples processed")
 
 
-def universal_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+def eva_reproduction_collate_fn_fixed(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Universal collate function for both EVA and CLIP denoising
+    Fixed collate function for EVA reproduction with proper tensor naming
+    
+    This function:
+    1. Takes clean EVA embeddings as targets
+    2. Creates noisy versions for input
+    3. Uses CLIP embeddings for conditioning
+    4. Sets up flow matching with proper timesteps
+    5. Uses correct tensor names for trainer compatibility
     """
     if not batch:
         raise ValueError("Empty batch")
@@ -581,195 +377,143 @@ def universal_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         raise ValueError("No valid items in batch")
     
     try:
-        # Get task mode from first item
-        task_mode = valid_batch[0]['task_mode']
-        
         # Stack embeddings
-        input_embeddings = torch.stack([item['input_embeddings'] for item in valid_batch])
-        conditioning_embeddings = torch.stack([item['conditioning_embeddings'] for item in valid_batch])
-        target_embeddings = torch.stack([item['target_embeddings'] for item in valid_batch])
-        noise = torch.stack([item['noise'] for item in valid_batch])
-        noise_levels = torch.tensor([item['noise_level'] for item in valid_batch])
+        clip_embeddings = torch.stack([item['clip_embeddings'] for item in valid_batch])  # [B, N, 1024]
+        eva_embeddings = torch.stack([item['eva_embeddings'] for item in valid_batch])    # [B, N, 4096]
         
         # Collect metadata
         captions = [item['caption'] for item in valid_batch]
         keys = [item['key'] for item in valid_batch]
         
-        batch_size, seq_len = input_embeddings.shape[:2]
-        device = input_embeddings.device
-        dtype = input_embeddings.dtype
+        batch_size, seq_len, eva_dim = eva_embeddings.shape
+        device = eva_embeddings.device
+        dtype = eva_embeddings.dtype
         
         # Ensure float32 for stability
-        input_embeddings = input_embeddings.float()
-        conditioning_embeddings = conditioning_embeddings.float()
-        target_embeddings = target_embeddings.float()
-        noise = noise.float()
-        noise_levels = noise_levels.float()
+        clip_embeddings = clip_embeddings.float()
+        eva_embeddings = eva_embeddings.float()
         
-        # Ensure L2 normalization
+        # Apply final normalization to ensure L2 norm = 1
         eps = 1e-8
-        input_embeddings = F.normalize(input_embeddings + eps, p=2, dim=-1)
-        conditioning_embeddings = F.normalize(conditioning_embeddings + eps, p=2, dim=-1)
-        target_embeddings = F.normalize(target_embeddings + eps, p=2, dim=-1)
-        noise = F.normalize(noise + eps, p=2, dim=-1)
+        clip_embeddings = F.normalize(clip_embeddings + eps, p=2, dim=-1)
+        eva_embeddings = F.normalize(eva_embeddings + eps, p=2, dim=-1)
         
-        # SPHERICAL FLOW MATCHING SETUP
+        # FLOW MATCHING SETUP for EVA reproduction
+        # Sample random timesteps for each sample in batch
         timesteps = torch.rand(batch_size, device=device, dtype=dtype)
-        t_expanded = timesteps.view(batch_size, 1, 1)
         
-        # Compute angles between target and noise
-        cos_angles = torch.sum(target_embeddings * noise, dim=-1, keepdim=True)
-        cos_angles = torch.clamp(cos_angles, -1 + 1e-7, 1 - 1e-7)
-        angles = torch.acos(cos_angles)
+        # Create noise (source distribution) - same dimension as EVA
+        noise = torch.randn_like(eva_embeddings, device=device, dtype=dtype)
+        noise = F.normalize(noise + eps, p=2, dim=-1)  # Normalize noise
         
-        # Avoid division by zero
-        sin_angles = torch.sin(angles)
-        sin_angles = torch.clamp(sin_angles, min=1e-7)
+        # Linear interpolation for rectified flow: x_t = (1-t) * noise + t * eva_clean
+        t_expanded = timesteps.view(batch_size, 1, 1)  # [B, 1, 1]
+        noisy_eva = (1 - t_expanded) * noise + t_expanded * eva_embeddings
         
-        # Spherical interpolation: x_t = slerp(noise, target, t)
-        target_weight = torch.sin(t_expanded * angles) / sin_angles
-        noise_weight = torch.sin((1 - t_expanded) * angles) / sin_angles
-        
-        x_t = noise_weight * noise + target_weight * target_embeddings
-        x_t = F.normalize(x_t + eps, p=2, dim=-1)
-        
-        # Spherical velocity (for velocity prediction)
-        velocity_target = target_embeddings - noise
-        
-        # Get dimensions for validation
-        input_dim = valid_batch[0]['input_dim']
-        output_dim = valid_batch[0]['output_dim']
-        conditioning_dim = valid_batch[0]['conditioning_dim']
+        # Velocity target: v = eva_clean - noise (for rectified flow)
+        velocity_target = eva_embeddings - noise
         
         # Validation
-        assert input_embeddings.shape == (batch_size, seq_len, input_dim)
-        assert conditioning_embeddings.shape == (batch_size, seq_len, conditioning_dim)
-        assert target_embeddings.shape == (batch_size, seq_len, output_dim)
-        assert x_t.shape == (batch_size, seq_len, input_dim)
-        assert velocity_target.shape == (batch_size, seq_len, input_dim)
-        assert timesteps.shape == (batch_size,)
+        assert clip_embeddings.shape == (batch_size, seq_len, 1024), f"CLIP shape: {clip_embeddings.shape}"
+        assert eva_embeddings.shape == (batch_size, seq_len, 4096), f"EVA shape: {eva_embeddings.shape}"
+        assert noisy_eva.shape == (batch_size, seq_len, 4096), f"Noisy EVA shape: {noisy_eva.shape}"
+        assert velocity_target.shape == (batch_size, seq_len, 4096), f"Velocity target shape: {velocity_target.shape}"
+        assert timesteps.shape == (batch_size,), f"Timesteps shape: {timesteps.shape}"
         
+        # Return with correct tensor names for trainer compatibility
         return {
-            # Model inputs (universal interface)
-            'hidden_states': x_t,                            # [B, N, input_dim] - Interpolated state
-            'encoder_hidden_states': conditioning_embeddings, # [B, N, conditioning_dim] - Conditioning
-            'timestep': timesteps,                           # [B] - Flow matching timesteps
+            # Model inputs (using trainer-expected names)
+            'encoder_hidden_states': clip_embeddings,    # [B, N, 1024] - CLIP conditioning
+            'hidden_states': noisy_eva,                  # [B, N, 4096] - Noisy EVA input
+            'timestep': timesteps,                       # [B] - Flow matching timesteps
             
             # Training targets
-            'target_embeddings': target_embeddings,          # [B, N, output_dim] - Clean target
-            'velocity_target': velocity_target,              # [B, N, input_dim] - Velocity for flow matching
-            'noise': noise,                                  # [B, N, input_dim] - Pure noise
-            'input_embeddings': input_embeddings,            # [B, N, input_dim] - Original input
-            
-            # Flow matching state
-            'x_t': x_t,                                      # [B, N, input_dim] - Current flow state
-            'noise_levels': noise_levels,                    # [B] - Original noise levels
+            'eva_embeddings': eva_embeddings,            # [B, N, 4096] - Clean EVA (target)
+            'velocity_target': velocity_target,          # [B, N, 4096] - Velocity for flow matching
+            'noise': noise,                              # [B, N, 4096] - Original noise
             
             # Metadata
-            'task_mode': task_mode,
             'captions': captions,
             'keys': keys,
             'batch_size': batch_size,
             'training_mode': valid_batch[0]['training_mode'],
             'num_tokens': valid_batch[0]['num_tokens'],
             'seq_len': seq_len,
-            'input_dim': input_dim,
-            'output_dim': output_dim,
-            'conditioning_dim': conditioning_dim,
             
             # Normalization status
-            'embeddings_normalized': True,
-            'input_norm_mean': torch.norm(input_embeddings, dim=-1).mean().item(),
-            'conditioning_norm_mean': torch.norm(conditioning_embeddings, dim=-1).mean().item(),
-            'target_norm_mean': torch.norm(target_embeddings, dim=-1).mean().item(),
+            'clip_embeddings_normalized': True,
+            'eva_embeddings_normalized': True,
+            'clip_norm_mean': torch.norm(clip_embeddings, dim=-1).mean().item(),
+            'eva_norm_mean': torch.norm(eva_embeddings, dim=-1).mean().item(),
         }
         
     except Exception as e:
-        logger.error(f"Error in universal collate function: {e}")
+        logger.error(f"Error in collate function: {e}")
         logger.error(f"Batch size: {len(batch)}")
         if batch:
             try:
                 logger.error(f"First item keys: {list(batch[0].keys())}")
-                logger.error(f"Task mode: {batch[0].get('task_mode', 'unknown')}")
+                for key, value in batch[0].items():
+                    if torch.is_tensor(value):
+                        logger.error(f"  {key}: {value.shape} {value.dtype}")
             except:
                 pass
         raise
 
 
-def create_universal_dataloaders(
+def create_eva_reproduction_dataloaders(
     chunked_embeddings_dir: Union[str, Path],
-    task_mode: str = "eva_denoising",  # NEW: "eva_denoising" or "clip_denoising"
     batch_size: int = 16,
     eval_batch_size: Optional[int] = None,
     training_mode: str = "patch_only",
     max_shards: Optional[int] = None,
-    noise_schedule: str = "uniform",
-    max_noise_level: float = 0.9,
-    min_noise_level: float = 0.1,
+    normalize_embeddings: bool = True,
     num_workers: int = 0,
     pin_memory: bool = False,
     **kwargs
 ) -> Tuple[DataLoader, Optional[DataLoader]]:
-    """Create universal dataloaders for EVA or CLIP denoising"""
+    """Create dataloaders for EVA reproduction with fixed collate function"""
     
     if eval_batch_size is None:
         eval_batch_size = batch_size
     
-    # Task info
-    if task_mode == "eva_denoising":
-        logger.info(f"Creating EVA denoising dataloaders:")
-        logger.info(f"  INPUT: Noisy EVA embeddings [B, N, 4096]")
-        logger.info(f"  CONDITIONING: Clean EVA embeddings [B, N, 4096]")
-        logger.info(f"  TARGET: Clean EVA embeddings [B, N, 4096]")
-    elif task_mode == "clip_denoising":
-        logger.info(f"Creating CLIP denoising dataloaders:")
-        logger.info(f"  INPUT: Noisy CLIP embeddings [B, N, 1024]")
-        logger.info(f"  CONDITIONING: Clean EVA embeddings [B, N, 4096]")
-        logger.info(f"  TARGET: Clean CLIP embeddings [B, N, 1024]")
-    else:
-        raise ValueError(f"Unknown task_mode: {task_mode}")
-    
-    logger.info(f"  Noise schedule: {noise_schedule}")
-    logger.info(f"  Noise range: [{min_noise_level}, {max_noise_level}]")
+    logger.info(f"Creating EVA reproduction dataloaders:")
+    logger.info(f"  Target: EVA embeddings [B, N, 4096]")
+    logger.info(f"  Conditioning: CLIP embeddings [B, N, 1024]")
+    logger.info(f"  Normalize: {normalize_embeddings}")
     
     # Create training dataset
-    train_dataset = UniversalDenoisingDataset(
+    train_dataset = BLIP3oEVAReproductionDataset(
         chunked_embeddings_dir=chunked_embeddings_dir,
-        task_mode=task_mode,
         split="train",
         training_mode=training_mode,
+        normalize_embeddings=normalize_embeddings,
         max_shards=max_shards,
         shuffle_shards=True,
         shuffle_within_shard=True,
-        noise_schedule=noise_schedule,
-        max_noise_level=max_noise_level,
-        min_noise_level=min_noise_level,
         **kwargs
     )
     
-    # Create training dataloader
+    # Create training dataloader with fixed collate function
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         num_workers=num_workers,
-        collate_fn=universal_collate_fn,
+        collate_fn=eva_reproduction_collate_fn_fixed,
         pin_memory=pin_memory,
         drop_last=True,
         persistent_workers=num_workers > 0,
     )
     
-    # Create evaluation dataset
-    eval_dataset = UniversalDenoisingDataset(
+    # Create evaluation dataset (same data for now)
+    eval_dataset = BLIP3oEVAReproductionDataset(
         chunked_embeddings_dir=chunked_embeddings_dir,
-        task_mode=task_mode,
         split="eval",
         training_mode=training_mode,
+        normalize_embeddings=normalize_embeddings,
         max_shards=max_shards,
         shuffle_shards=False,
         shuffle_within_shard=False,
-        noise_schedule="uniform",
-        max_noise_level=0.7,
-        min_noise_level=0.3,
         **kwargs
     )
     
@@ -777,28 +521,12 @@ def create_universal_dataloaders(
         eval_dataset,
         batch_size=eval_batch_size,
         num_workers=min(num_workers, 1),
-        collate_fn=universal_collate_fn,
+        collate_fn=eva_reproduction_collate_fn_fixed,
         pin_memory=pin_memory,
         drop_last=False,
         persistent_workers=min(num_workers, 1) > 0,
     )
     
-    logger.info(f"Universal dataloaders created successfully for {task_mode}")
+    logger.info(f"EVA reproduction dataloaders created successfully")
     
     return train_dataloader, eval_dataloader
-
-
-# Backward compatibility aliases
-def create_eva_denoising_dataloaders(*args, **kwargs):
-    """Backward compatibility: create EVA denoising dataloaders"""
-    kwargs['task_mode'] = 'eva_denoising'
-    return create_universal_dataloaders(*args, **kwargs)
-
-def create_clip_denoising_dataloaders(*args, **kwargs):
-    """NEW: Create CLIP denoising dataloaders"""
-    kwargs['task_mode'] = 'clip_denoising'
-    return create_universal_dataloaders(*args, **kwargs)
-
-# Legacy alias
-eva_denoising_collate_fn = universal_collate_fn
-BLIP3oEVADenoisingDataset = UniversalDenoisingDataset
