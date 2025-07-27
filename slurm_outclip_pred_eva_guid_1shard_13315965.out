@@ -1350,3 +1350,205 @@ python train_eva_repro.py \
 2025-07-27 09:22:41,950 - INFO -     target_max: 1.538091
 2025-07-27 09:22:41,950 - INFO - Running evaluation at step 300...
 2025-07-27 09:22:48,256 - INFO - Loaded shard 1/1: 2646 samples
+2025-07-27 09:24:18,601 - INFO - Evaluation results for clip_denoising:
+2025-07-27 09:24:18,603 - INFO -   eval_clip_similarity: 0.6975
+2025-07-27 09:24:18,603 - INFO -   eval_clip_similarity_std: 0.0770
+2025-07-27 09:24:18,603 - INFO -   eval_clip_angular_distance: 0.7849
+2025-07-27 09:24:18,603 - INFO -   eval_clip_sphere_violation: 0.0000
+2025-07-27 09:24:18,603 - INFO -   eval_clip_high_quality: 0.8829
+2025-07-27 09:24:18,603 - INFO -   eval_clip_very_high_quality: 0.5516
+2025-07-27 09:24:18,603 - INFO -   eval_clip_excellent_quality: 0.0774
+2025-07-27 09:24:18,603 - INFO -   eval_clip_samples: 504.0000
+2025-07-27 09:24:18,603 - INFO -   eval_clip_similarity_min: 0.2391
+2025-07-27 09:24:18,603 - INFO -   eval_clip_similarity_max: 0.8575
+2025-07-27 09:24:18,603 - INFO -   eval_task_mode: clip_denoising
+2025-07-27 09:24:20,266 - INFO - Step 310 [CLIP]: Loss=0.000510, PredSim=0.8855, EvalSim=0.7811 (excellent), SphereViol=0.000000, Dims=1024|4096, GradNorm=456.598, LR=9.90e-05 [OVERFIT TEST]
+2025-07-27 09:24:20,266 - INFO -   Detailed metrics for clip_denoising:
+2025-07-27 09:24:20,266 - INFO -     loss: 0.000510
+2025-07-27 09:24:20,266 - INFO -     total_loss: 0.000510
+2025-07-27 09:24:20,266 - INFO -     reg_loss: 0.000000
+2025-07-27 09:24:20,266 - INFO -     prediction_similarity: 0.885479
+2025-07-27 09:24:20,266 - INFO -     eval_similarity: 0.781054
+2025-07-27 09:24:20,266 - INFO -     similarity_std: 0.034187
+2025-07-27 09:24:20,266 - INFO -     output_dim: 1024.000000
+2025-07-27 09:24:20,266 - INFO -     target_dim: 1024.000000
+2025-07-27 09:24:20,266 - INFO -     conditioning_dim: 4096.000000
+2025-07-27 09:24:20,266 - INFO -     sphere_violation: 0.000000
+2025-07-27 09:24:20,266 - INFO -     sphere_constraint_loss: 0.000000
+2025-07-27 09:24:20,266 - INFO -     pred_norm: 1.378408
+2025-07-27 09:24:20,267 - INFO -     target_norm: 1.570184
+2025-07-27 09:24:20,267 - INFO -     clean_norm: 1.000000
+2025-07-27 09:24:20,267 - INFO -     noise_norm: 1.000000
+2025-07-27 09:24:20,267 - INFO -     conditioning_norm: 1.000000
+2025-07-27 09:24:20,267 - INFO -     error_norm: 0.694069
+2025-07-27 09:24:20,267 - INFO -     relative_error: 0.442030
+2025-07-27 09:24:20,267 - INFO -     step_count: 310.000000
+2025-07-27 09:24:20,267 - INFO -     loss_ema: 0.001325
+2025-07-27 09:24:20,267 - INFO -     similarity_ema: 0.754000
+2025-07-27 09:24:20,267 - INFO -     sphere_violation_ema: 0.000000
+2025-07-27 09:24:20,268 - INFO -     eva_similarity_ema: 0.000000
+2025-07-27 09:24:20,268 - INFO -     clip_similarity_ema: 0.770016
+2025-07-27 09:24:20,268 - INFO -     timestep_mean: 0.576760
+2025-07-27 09:24:20,268 - INFO -     timestep_std: 0.248096
+2025-07-27 09:24:20,268 - INFO -     interpolation_weight: 0.576660
+2025-07-27 09:24:20,268 - INFO -     pred_min: -0.687012
+2025-07-27 09:24:20,268 - INFO -     pred_max: 1.488281
+2025-07-27 09:24:20,268 - INFO -     target_min: -0.737595
+2025-07-27 09:24:20,268 - INFO -     target_max: 1.538091
+2025-07-27 09:24:21,973 - INFO - Step 320 [CLIP]: Loss=0.000467, PredSim=0.8959, EvalSim=0.7825 (excellent), SphereViol=0.000000, Dims=1024|4096, GradNorm=353.164, LR=9.88e-05 [OVERFIT TEST]
+2025-07-27 09:24:21,973 - INFO -   Detailed metrics for clip_denoising:
+2025-07-27 09:24:21,973 - INFO -     loss: 0.000467
+2025-07-27 09:24:21,973 - INFO -     total_loss: 0.000467
+2025-07-27 09:24:21,973 - INFO -     reg_loss: 0.000000
+2025-07-27 09:24:21,973 - INFO -     prediction_similarity: 0.895907
+2025-07-27 09:24:21,973 - INFO -     eval_similarity: 0.782489
+2025-07-27 09:24:21,973 - INFO -     similarity_std: 0.031038
+2025-07-27 09:24:21,973 - INFO -     output_dim: 1024.000000
+2025-07-27 09:24:21,973 - INFO -     target_dim: 1024.000000
+2025-07-27 09:24:21,974 - INFO -     conditioning_dim: 4096.000000
+2025-07-27 09:24:21,974 - INFO -     sphere_violation: 0.000000
+2025-07-27 09:24:21,974 - INFO -     sphere_constraint_loss: 0.000000
+2025-07-27 09:24:21,974 - INFO -     pred_norm: 1.401680
+2025-07-27 09:24:21,974 - INFO -     target_norm: 1.570184
+2025-07-27 09:24:21,974 - INFO -     clean_norm: 1.000000
+2025-07-27 09:24:21,974 - INFO -     noise_norm: 1.000000
+2025-07-27 09:24:21,974 - INFO -     conditioning_norm: 1.000000
+2025-07-27 09:24:21,974 - INFO -     error_norm: 0.663764
+2025-07-27 09:24:21,974 - INFO -     relative_error: 0.422730
+2025-07-27 09:24:21,974 - INFO -     step_count: 320.000000
+2025-07-27 09:24:21,974 - INFO -     loss_ema: 0.001244
+2025-07-27 09:24:21,974 - INFO -     similarity_ema: 0.767228
+2025-07-27 09:24:21,974 - INFO -     sphere_violation_ema: 0.000000
+2025-07-27 09:24:21,974 - INFO -     eva_similarity_ema: 0.000000
+2025-07-27 09:24:21,974 - INFO -     clip_similarity_ema: 0.771194
+2025-07-27 09:24:21,974 - INFO -     timestep_mean: 0.576760
+2025-07-27 09:24:21,974 - INFO -     timestep_std: 0.248096
+2025-07-27 09:24:21,974 - INFO -     interpolation_weight: 0.576660
+2025-07-27 09:24:21,974 - INFO -     pred_min: -0.707520
+2025-07-27 09:24:21,975 - INFO -     pred_max: 1.509766
+2025-07-27 09:24:21,975 - INFO -     target_min: -0.737595
+2025-07-27 09:24:21,975 - INFO -     target_max: 1.538091
+2025-07-27 09:24:23,656 - INFO - Step 330 [CLIP]: Loss=0.000431, PredSim=0.9045, EvalSim=0.7835 (excellent), SphereViol=0.000000, Dims=1024|4096, GradNorm=338.481, LR=9.87e-05 [OVERFIT TEST]
+2025-07-27 09:24:23,656 - INFO -   Detailed metrics for clip_denoising:
+2025-07-27 09:24:23,656 - INFO -     loss: 0.000431
+2025-07-27 09:24:23,656 - INFO -     total_loss: 0.000431
+2025-07-27 09:24:23,656 - INFO -     reg_loss: 0.000000
+2025-07-27 09:24:23,656 - INFO -     prediction_similarity: 0.904460
+2025-07-27 09:24:23,656 - INFO -     eval_similarity: 0.783491
+2025-07-27 09:24:23,656 - INFO -     similarity_std: 0.028941
+2025-07-27 09:24:23,656 - INFO -     output_dim: 1024.000000
+2025-07-27 09:24:23,656 - INFO -     target_dim: 1024.000000
+2025-07-27 09:24:23,656 - INFO -     conditioning_dim: 4096.000000
+2025-07-27 09:24:23,656 - INFO -     sphere_violation: 0.000000
+2025-07-27 09:24:23,656 - INFO -     sphere_constraint_loss: 0.000000
+2025-07-27 09:24:23,657 - INFO -     pred_norm: 1.423733
+2025-07-27 09:24:23,657 - INFO -     target_norm: 1.570184
+2025-07-27 09:24:23,657 - INFO -     clean_norm: 1.000000
+2025-07-27 09:24:23,657 - INFO -     noise_norm: 1.000000
+2025-07-27 09:24:23,657 - INFO -     conditioning_norm: 1.000000
+2025-07-27 09:24:23,657 - INFO -     error_norm: 0.638012
+2025-07-27 09:24:23,657 - INFO -     relative_error: 0.406330
+2025-07-27 09:24:23,658 - INFO -     step_count: 330.000000
+2025-07-27 09:24:23,658 - INFO -     loss_ema: 0.001168
+2025-07-27 09:24:23,658 - INFO -     similarity_ema: 0.780073
+2025-07-27 09:24:23,658 - INFO -     sphere_violation_ema: 0.000000
+2025-07-27 09:24:23,658 - INFO -     eva_similarity_ema: 0.000000
+2025-07-27 09:24:23,658 - INFO -     clip_similarity_ema: 0.772345
+2025-07-27 09:24:23,658 - INFO -     timestep_mean: 0.576760
+2025-07-27 09:24:23,658 - INFO -     timestep_std: 0.248096
+2025-07-27 09:24:23,658 - INFO -     interpolation_weight: 0.576660
+2025-07-27 09:24:23,658 - INFO -     pred_min: -0.726074
+2025-07-27 09:24:23,658 - INFO -     pred_max: 1.506836
+2025-07-27 09:24:23,658 - INFO -     target_min: -0.737595
+2025-07-27 09:24:23,658 - INFO -     target_max: 1.538091
+2025-07-27 09:24:23,905 - INFO - Iteration completed: 2646 samples processed
+2025-07-27 09:24:23,927 - INFO - Epoch 1 completed:
+2025-07-27 09:24:23,928 - INFO -   Average loss: 0.001242
+2025-07-27 09:24:23,928 - INFO -   Best loss: 0.000431
+2025-07-27 09:24:23,928 - INFO -   Best similarity: 0.7837
+2025-07-27 09:24:23,928 - ERROR - Training failed with error: sequence index must be integer, not 'slice'
+2025-07-27 09:24:25,354 - INFO - Checkpoint saved: checkpoints/universal_clip_denoising_20250727_091813/checkpoint_step_330.pt
+2025-07-27 09:24:25,355 - INFO - Running final evaluation...
+2025-07-27 09:24:30,906 - INFO - Loaded shard 1/1: 2646 samples
+2025-07-27 09:27:30,527 - INFO - CLIP-ViT Denoising with EVA Conditioning training completed!
+2025-07-27 09:27:30,528 - INFO -   Total time: 535.6 seconds
+2025-07-27 09:27:30,528 - INFO -   Total steps: 330
+2025-07-27 09:27:30,528 - INFO -   Best loss: 0.000431
+2025-07-27 09:27:30,528 - INFO -   Best similarity: 0.7837
+2025-07-27 09:27:30,528 - INFO -   Final clip_denoising evaluation:
+2025-07-27 09:27:30,528 - INFO -     eval_clip_similarity: 0.6958
+2025-07-27 09:27:30,528 - INFO -     eval_clip_similarity_std: 0.0780
+2025-07-27 09:27:30,528 - INFO -     eval_clip_angular_distance: 0.7864
+2025-07-27 09:27:30,528 - INFO -     eval_clip_sphere_violation: 0.0000
+2025-07-27 09:27:30,528 - INFO -     eval_clip_high_quality: 0.8800
+2025-07-27 09:27:30,528 - INFO -     eval_clip_very_high_quality: 0.5430
+2025-07-27 09:27:30,529 - INFO -     eval_clip_excellent_quality: 0.0600
+2025-07-27 09:27:30,529 - INFO -     eval_clip_samples: 1000.0000
+2025-07-27 09:27:30,529 - INFO -     eval_clip_similarity_min: 0.1908
+2025-07-27 09:27:30,529 - INFO -     eval_clip_similarity_max: 0.8860
+2025-07-27 09:27:30,529 - ERROR - ❌ Training failed with error: Unknown format code 'f' for object of type 'str'
+
+========================================
+📊 Universal Denoising Results
+========================================
+❌ FAILED: Training exit code 1
+
+💡 Troubleshooting Universal Implementation:
+  • Check log files in ./slurm_out/ for detailed error messages
+  • Verify all universal Python files are present:
+    - train_eva_repro.py (main script)
+    - src/modules/models/blip3o_eva_dit.py (universal model)
+    - src/modules/losses/blip3o_eva_loss.py (universal loss)
+    - src/modules/datasets/blip3o_eva_dataset.py (universal dataset)
+    - src/modules/trainers/blip3o_eva_trainer.py (universal trainer)
+    - src/modules/config/blip3o_config.py (universal config)
+  • Check embeddings directory structure and file formats
+  • Ensure embeddings contain both CLIP and EVA embeddings for clip_denoising
+  • Monitor GPU memory usage with nvidia-smi
+  • Try reducing batch_size if out-of-memory errors
+  • Check WandB dashboard for any logged metrics before failure
+
+🔧 Quick Recovery Options:
+  • Start with overfitting test: --overfit_test_size 5 --batch_size 2
+  • Use smaller model: --model_size tiny
+  • Enable more debugging: --debug_mode --max_shards 1
+  • Try eva_denoising task first to verify basic functionality
+  • Check if embeddings contain both CLIP and EVA data
+  • Disable WandB if causing issues: set USE_WANDB=false
+
+📊 GPU Resource Usage Summary:
+GPU | Total Memory | Used Memory | Utilization
+NVIDIA | H100, MB | 95830, MB | 1,%
+NVIDIA | H100, MB | 95830, MB | 1,%
+NVIDIA | H100, MB | 95830, MB | 1,%
+
+🏁 Job completed at Sun Jul 27 09:27:33 CEST 2025
+Total job time: 487111.30 hours
+
+📚 UNIVERSAL ARCHITECTURE SUMMARY:
+This job tests Universal BLIP3-o DiT architecture for both EVA and CLIP denoising.
+Task mode: clip_denoising
+CLIP Denoising: Validates cross-attention conditioning between 1024D and 4096D spaces.
+Success indicates the universal architecture is correctly implemented and ready.
+
+📊 WandB Integration Summary:
+✅ Comprehensive metrics logging enabled
+✅ Real-time training visualization
+✅ Task-specific evaluation tracking
+✅ Project: eva-clip
+✅ Run: clip_pred_1shard-base-20250727_091812
+========================================
+
+JOB STATISTICS
+==============
+Job ID: 13315965
+Cluster: snellius
+User/Group: azadaianchuk1/azadaianchuk1
+State: FAILED (exit code 1)
+Nodes: 1
+Cores per node: 32
+CPU Utilized: 00:21:19
+CPU Efficiency: 7.00% of 05:04:32 core-walltime
+Job Wall-clock time: 00:09:31
+Memory Utilized: 13.89 GB
+Memory Efficiency: 21.70% of 64.00 GB (64.00 GB/node)

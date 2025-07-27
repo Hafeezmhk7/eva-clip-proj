@@ -183,14 +183,7 @@ Each shard file contains:
 - `--max_noise_level`: 0.9 (maximum corruption)
 - `--min_noise_level`: 0.1 (minimum corruption)
 
-## 🎯 Success Indicators
-
-### During Training
-✅ **Non-zero gradients** from first step  
-✅ **Decreasing loss** trend  
-✅ **Increasing cosine similarity** (target: 0.0 → 0.5+)  
-✅ **Stable norms** ≈ 1.0 (unit sphere maintained)  
-✅ **No NaN/Inf** issues  
+  
 
 ### Evaluation Metrics
 - **Main metric**: Cosine similarity between generated and target
@@ -219,24 +212,14 @@ Each shard file contains:
 - **Unit sphere constraints**: L2 normalization enforced
 - **Gradient clipping**: Prevents instability
 
-## 🐛 Debugging
 
-### Common Issues
-1. **Negative similarities**: Check normalization, reduce learning rate
-2. **NaN gradients**: Enable gradient clipping, reduce batch size  
-3. **Poor convergence**: Try overfitting test first
-4. **Memory issues**: Reduce batch size or model size
+
 
 ### Debug Mode
 ```bash
 --debug_mode --overfit_test_size 10 --max_shards 1
 ```
 
-### Monitoring
-- Watch for **non-zero gradients** 
-- **Loss should decrease** within first epoch
-- **Similarity should increase** from ~0.01 to >0.1
-- **Norms should stay** near 1.0
 
 ## 📚 File Structure
 
@@ -256,26 +239,3 @@ src/modules/
 train_universal_denoising.py      # Main training script
 ```
 
-## 🎉 What's New
-
-### Universal Architecture
-- ✅ **Single codebase** for both EVA and CLIP denoising
-- ✅ **Task-adaptive dimensions** automatically configured
-- ✅ **Flexible cross-attention** handles different conditioning sizes
-- ✅ **Universal evaluation metrics** with task-specific thresholds
-
-### CLIP Denoising Features
-- ✅ **1024D spherical flow** for CLIP embeddings
-- ✅ **4096D EVA conditioning** via cross-attention  
-- ✅ **Proper dimension handling** throughout pipeline
-- ✅ **Task-specific quality thresholds** for evaluation
-
-### Improved Training
-- ✅ **Better initialization** for spherical flow
-- ✅ **Enhanced gradient monitoring** and clipping
-- ✅ **Task-aware logging** and metrics
-- ✅ **Comprehensive debugging** tools
-
----
-
-**Ready to train!** Start with the overfitting test to validate your setup, then run full training on your task of choice.

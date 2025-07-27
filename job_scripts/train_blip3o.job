@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=18
 #SBATCH --time=15:00:00
 #SBATCH --mem=64G
-#SBATCH --output=./slurm_outclip_pred_eva_guid_1shard_%j.out
+#SBATCH --output=./slurm_out/clip_pred_eva_guid_1shard_%j.out
 #SBATCH --error=./slurm_out/clip_pred_eva_guid_1shard_%j.err
 
 # =============================================================================

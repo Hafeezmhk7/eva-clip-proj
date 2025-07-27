@@ -7,12 +7,12 @@
 #SBATCH --cpus-per-task=18
 #SBATCH --time=15:00:00
 #SBATCH --mem=64G
-#SBATCH --output=./slurm_out/eva_denoising_1shard_%j.out
-#SBATCH --error=./slurm_out/eva_denoising_1shard_%j.err
+#SBATCH --output=./slurm_out/eva_pred_eva_guid_1shard_%j.out
+#SBATCH --error=./slurm_out/eva_pred_eva_guid_1shard_%j.err
 
 # =============================================================================
-# Universal BLIP3-o Denoising Training with WandB Integration
-# Supports both EVA denoising and CLIP denoising with comprehensive monitoring
+# Universal BLIP3-o Denoising Training with WandB Integration - FIXED
+# Supports both EVA denoising and CLIP denoising with EVA conditioning
 # =============================================================================
 
 echo "🚀 Universal BLIP3-o Denoising Training with WandB"
@@ -21,7 +21,6 @@ echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node: $(hostname)"
 echo "Time: $(date)"
 echo "GPUs: $(nvidia-smi --query-gpu=name --format=csv,noheader,nounits | tr '\n' ', ')"
-echo "WandB Integration: ENABLED"
 echo "=========================================================="
 
 cd $SLURM_SUBMIT_DIR
@@ -34,41 +33,29 @@ module load CUDA/12.6.0
 source activate eva_clip_env
 
 # =============================================================================
-# WANDB SETUP AND LOGIN
+# WANDB CONFIGURATION - FIXED!
 # =============================================================================
-echo "📊 Setting up WandB monitoring..."
 
-# Install WandB if not already installed
-# pip install wandb --quiet
+# WandB Settings (Enable/Disable WandB logging)
+USE_WANDB=true                          # Set to false to disable WandB
+WANDB_PROJECT="eva-clip"  # WandB project name
+WANDB_API_KEY="0d9895af249ee18e4fa141e8a2350e0f4adb920f"  # Your WandB API key
 
-# WandB login with provided API key
-echo "🔑 Logging into WandB..."
-wandb login 0d9895af249ee18e4fa141e8a2350e0f4adb920f --relogin
+# Auto-generate run name based on task and timestamp
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-# Verify WandB login
-if [ $? -eq 0 ]; then
-    echo "✅ WandB login successful"
-    
-    # Set WandB environment variables for better integration
-    export WANDB_PROJECT="eva-clip"
-    export WANDB_ENTITY="$(whoami)"
-    export WANDB_RUN_GROUP="eva_pred_eva_guid_1shard-${SLURM_JOB_ID}"
-    export WANDB_JOB_TYPE="training"
-    export WANDB_TAGS="slurm,gpu_h100,universal_denoising"
-    export WANDB_NOTES="Universal BLIP3-o denoising training with EVA and CLIP support"
-    
-    # WandB cache directory (avoid home directory quota issues)
-    export WANDB_CACHE_DIR="${TMPDIR}/wandb_cache"
-    export WANDB_DATA_DIR="${TMPDIR}/wandb_data"
-    mkdir -p "${WANDB_CACHE_DIR}" "${WANDB_DATA_DIR}"
-    
-    echo "🎯 WandB Project: ${WANDB_PROJECT}"
-    echo "👤 WandB Entity: ${WANDB_ENTITY}"
-    echo "🏷️ WandB Tags: ${WANDB_TAGS}"
-    echo "💾 WandB Cache: ${WANDB_CACHE_DIR}"
+# WandB Login (only if enabled)
+if [ "$USE_WANDB" = true ]; then
+    echo "📊 Setting up WandB logging..."
+    wandb login $WANDB_API_KEY --relogin
+    if [ $? -eq 0 ]; then
+        echo "✅ WandB login successful"
+    else
+        echo "❌ WandB login failed, disabling WandB"
+        USE_WANDB=false
+    fi
 else
-    echo "❌ WandB login failed - continuing without WandB"
-    export WANDB_MODE="disabled"
+    echo "📊 WandB logging disabled"
 fi
 
 # =============================================================================
@@ -79,15 +66,15 @@ fi
 # - "eva_denoising": Input/Output EVA [4096], Conditioning EVA [4096] (original task)
 # - "clip_denoising": Input/Output CLIP [1024], Conditioning EVA [4096] (NEW!)
 
-TASK_MODE="clip_denoising"          # NEW: CLIP denoising with EVA conditioning
-# TASK_MODE="eva_denoising"         # Original: EVA denoising
+# TASK_MODE="clip_denoising"          # NEW: CLIP denoising with EVA conditioning
+TASK_MODE="eva_denoising"         # Original: EVA denoising
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
 EMBEDDINGS_DIR="/scratch-shared/azadaianchuk1/blip3o_workspace/embeddings/patch_only_256_tokens"
-OUTPUT_DIR="./checkpoints/universal_${TASK_MODE}_wandb_$(date +%Y%m%d_%H%M%S)"
+OUTPUT_DIR="./checkpoints/universal_${TASK_MODE}_$(date +%Y%m%d_%H%M%S)"
 TRAINING_MODE="patch_only"
 MODEL_SIZE="base"
 
@@ -107,7 +94,7 @@ EVAL_INFERENCE_STEPS=50
 # Testing configuration
 OVERFIT_TEST_SIZE=20            # Enable overfitting test to verify architecture
 DEBUG_MODE="--debug_mode"      # Enable debug logging
-MAX_SHARDS=1                   # Start with fewer shards for testing
+MAX_SHARDS=1                    # Start with fewer shards for testing - REDUCED FOR DEBUGGING
 
 # Spherical flow matching parameters
 SPHERE_CONSTRAINT_WEIGHT=0.1    # Ensures unit sphere constraints
@@ -115,16 +102,24 @@ NOISE_SCHEDULE="uniform"        # Noise sampling schedule
 MAX_NOISE_LEVEL=0.9            # Maximum corruption level
 MIN_NOISE_LEVEL=0.1            # Minimum corruption level
 
-# WandB specific configuration
-WANDB_RUN_NAME="${TASK_MODE}_${MODEL_SIZE}_${SLURM_JOB_ID}"
-WANDB_TAGS_EXTRA="${TASK_MODE},${MODEL_SIZE},slurm_${SLURM_JOB_ID}"
+# FIXED: WandB run configuration (properly handle tags as separate arguments)
+if [ "$TASK_MODE" = "eva_denoising" ]; then
+    WANDB_RUN_NAME="eva_pred_1shard-${MODEL_SIZE}-${TIMESTAMP}"
+    WANDB_TAGS_LIST="eva_denoising ${MODEL_SIZE} ${TRAINING_MODE}"
+elif [ "$TASK_MODE" = "clip_denoising" ]; then
+    WANDB_RUN_NAME="clip_pred_1shard-${MODEL_SIZE}-${TIMESTAMP}"
+    WANDB_TAGS_LIST="clip_denoising ${MODEL_SIZE} ${TRAINING_MODE} eva_conditioning"
+else
+    WANDB_RUN_NAME="universal-denoising-${TIMESTAMP}"
+    WANDB_TAGS_LIST="universal ${MODEL_SIZE} ${TRAINING_MODE}"
+fi
 
 # Create output directory
 mkdir -p "${OUTPUT_DIR}"
 mkdir -p ./slurm_out
 
 echo ""
-echo "⚙️ Universal Denoising Configuration with WandB:"
+echo "⚙️ Universal Denoising Configuration:"
 echo "========================================"
 
 if [ "$TASK_MODE" = "eva_denoising" ]; then
@@ -149,12 +144,21 @@ fi
 
 echo ""
 echo "🏗️ Model: Universal BLIP3-o DiT with task-adaptive dimensions"
-echo "📊 WandB: Real-time metrics and monitoring enabled"
 echo "Embeddings: $EMBEDDINGS_DIR"
 echo "Output: $OUTPUT_DIR"
 echo "Training mode: $TRAINING_MODE"
 echo "Model size: $MODEL_SIZE"
 echo "Max shards: $MAX_SHARDS"
+echo ""
+echo "📊 WandB Configuration:"
+if [ "$USE_WANDB" = true ]; then
+    echo "  Enabled: ✅ YES"
+    echo "  Project: $WANDB_PROJECT"
+    echo "  Run name: $WANDB_RUN_NAME"
+    echo "  Tags: $WANDB_TAGS_LIST"
+else
+    echo "  Enabled: ❌ NO"
+fi
 echo ""
 echo "📊 Training Hyperparameters:"
 echo "  Task mode: $TASK_MODE"
@@ -175,12 +179,6 @@ echo "🔍 Evaluation Configuration:"
 echo "  Eval every: $EVAL_EVERY_N_STEPS steps"
 echo "  Eval samples: $EVAL_NUM_SAMPLES"
 echo "  Inference steps: $EVAL_INFERENCE_STEPS"
-echo ""
-echo "📊 WandB Configuration:"
-echo "  Project: $WANDB_PROJECT"
-echo "  Run name: $WANDB_RUN_NAME"
-echo "  Tags: $WANDB_TAGS_EXTRA"
-echo "  Group: $WANDB_RUN_GROUP"
 echo ""
 
 # Verify embeddings exist
@@ -219,10 +217,33 @@ fi
 echo "✅ Universal training script found"
 
 echo ""
-echo "🚀 Starting Universal Denoising Training with WandB Monitoring..."
+echo "🚀 Starting Universal Denoising Training..."
 echo "=============================================="
 
-echo "  📊 Real-time metrics visible in WandB dashboard"
+if [ "$TASK_MODE" = "eva_denoising" ]; then
+    echo "🧪 EXPECTED BEHAVIOR FOR EVA DENOISING:"
+    echo "  ✅ Non-zero gradients from first step"
+    echo "  ✅ Decreasing loss within first few epochs"
+    echo "  ✅ Cosine similarity increasing from ~0.01 to >0.5"
+    echo "  ✅ EVA embeddings stay on unit sphere (norm ≈ 1.0)"
+    echo "  ✅ Final similarity >0.5 (good), >0.7 (excellent)"
+    echo "  ✅ Overfitting test should achieve >0.8 similarity"
+elif [ "$TASK_MODE" = "clip_denoising" ]; then
+    echo "🧪 EXPECTED BEHAVIOR FOR CLIP DENOISING:"
+    echo "  ✅ Non-zero gradients from first step"
+    echo "  ✅ Decreasing loss within first few epochs"
+    echo "  ✅ Cosine similarity increasing from ~0.01 to >0.4"
+    echo "  ✅ CLIP embeddings stay on unit sphere (norm ≈ 1.0)"
+    echo "  ✅ Cross-attention learns 1024D ↔ 4096D mapping"
+    echo "  ✅ Final similarity >0.4 (good), >0.6 (excellent)"
+    echo "  ✅ Overfitting test should achieve >0.7 similarity"
+fi
+
+echo "  ✅ No NaN/Inf issues or tensor shape mismatches"
+echo "  ✅ Stable gradient norms and learning rate scheduling"
+if [ "$USE_WANDB" = true ]; then
+    echo "  📊 All metrics logged to WandB for visualization"
+fi
 echo ""
 echo "🏗️ UNIVERSAL ARCHITECTURE FEATURES:"
 echo "  • Task-adaptive input/output dimensions"
@@ -232,14 +253,48 @@ echo "  • Sandwich Normalization (RMSNorm)"
 echo "  • Spherical Flow Matching with SLERP interpolation"
 echo "  • Proper gradient flow and initialization"
 echo "  • Task-specific evaluation metrics"
-echo "  • Comprehensive WandB monitoring and logging"
+if [ "$USE_WANDB" = true ]; then
+    echo "  • WandB integration for comprehensive logging"
+fi
 echo ""
 
-# Set up comprehensive WandB environment
-export WANDB_CONFIG_PATHS="${OUTPUT_DIR}/experiment_config.json"
-export WANDB_RUN_ID="${SLURM_JOB_ID}_${TASK_MODE}_$(date +%s)"
+# FIXED: Prepare WandB arguments (properly handle space-separated tags)
+WANDB_ARGS=""
+if [ "$USE_WANDB" = true ]; then
+    WANDB_ARGS="--use_wandb --wandb_project $WANDB_PROJECT --wandb_run_name $WANDB_RUN_NAME --wandb_tags $WANDB_TAGS_LIST"
+    echo "📊 WandB arguments: $WANDB_ARGS"
+    echo ""
+fi
 
-# Launch universal denoising training with WandB
+# DEBUGGING: Show exact command that will be run
+echo "🔍 DEBUGGING: Full command to be executed:"
+echo "python train_eva_repro.py \\"
+echo "    --task_mode \"$TASK_MODE\" \\"
+echo "    --chunked_embeddings_dir \"$EMBEDDINGS_DIR\" \\"
+echo "    --output_dir \"$OUTPUT_DIR\" \\"
+echo "    --model_size \"$MODEL_SIZE\" \\"
+echo "    --training_mode \"$TRAINING_MODE\" \\"
+echo "    --learning_rate $LEARNING_RATE \\"
+echo "    --batch_size $BATCH_SIZE \\"
+echo "    --num_epochs $NUM_EPOCHS \\"
+echo "    --warmup_steps $WARMUP_STEPS \\"
+echo "    --weight_decay $WEIGHT_DECAY \\"
+echo "    --max_grad_norm $MAX_GRAD_NORM \\"
+echo "    --sphere_constraint_weight $SPHERE_CONSTRAINT_WEIGHT \\"
+echo "    --noise_schedule $NOISE_SCHEDULE \\"
+echo "    --max_noise_level $MAX_NOISE_LEVEL \\"
+echo "    --min_noise_level $MIN_NOISE_LEVEL \\"
+echo "    --eval_every_n_steps $EVAL_EVERY_N_STEPS \\"
+echo "    --eval_num_samples $EVAL_NUM_SAMPLES \\"
+echo "    --eval_inference_steps $EVAL_INFERENCE_STEPS \\"
+echo "    --overfit_test_size $OVERFIT_TEST_SIZE \\"
+echo "    --max_shards $MAX_SHARDS \\"
+echo "    --fp16 \\"
+echo "    $DEBUG_MODE \\"
+echo "    $WANDB_ARGS"
+echo ""
+
+# Launch universal denoising training with WandB integration
 python train_eva_repro.py \
     --task_mode "$TASK_MODE" \
     --chunked_embeddings_dir "$EMBEDDINGS_DIR" \
@@ -262,18 +317,14 @@ python train_eva_repro.py \
     --overfit_test_size $OVERFIT_TEST_SIZE \
     --max_shards $MAX_SHARDS \
     --fp16 \
-    --use_wandb \
-    --wandb_project "$WANDB_PROJECT" \
-    --wandb_run_name "$WANDB_RUN_NAME" \
-    --wandb_tags $WANDB_TAGS_EXTRA \
-    --wandb_notes "Universal BLIP3-o ${TASK_MODE} training on Snellius H100 cluster" \
-    $DEBUG_MODE
+    $DEBUG_MODE \
+    $WANDB_ARGS
 
 TRAINING_EXIT_CODE=$?
 
 echo ""
 echo "========================================"
-echo "📊 Universal Denoising Results with WandB"
+echo "📊 Universal Denoising Results"
 echo "========================================"
 
 if [ $TRAINING_EXIT_CODE -eq 0 ]; then
@@ -308,7 +359,7 @@ try:
     print(f'⏱️ Training Time: {data.get(\"duration_seconds\", 0):.1f} seconds')
     
     # WandB URL if available
-    wandb_url = data.get('wandb_url', '')
+    wandb_url = data.get('wandb_url')
     if wandb_url:
         print(f'📊 WandB Dashboard: {wandb_url}')
     
@@ -395,13 +446,100 @@ except Exception as e:
         
         echo ""
         echo "📁 Training artifacts saved to: $OUTPUT_DIR"
+        
+        # Display WandB information if available
+        if [ "$USE_WANDB" = true ]; then
+            echo ""
+            echo "📊 WandB Dashboard:"
+            echo "=================="
+            echo "🔗 View detailed metrics, plots, and logs at your WandB dashboard"
+            echo "🔗 Project: https://wandb.ai/your-username/$WANDB_PROJECT"
+            echo "🔗 Run: $WANDB_RUN_NAME"
+            echo ""
+            echo "📊 WandB Features Available:"
+            echo "  • Real-time loss and similarity curves"
+            echo "  • Task-specific evaluation metrics"
+            echo "  • Gradient norm tracking"
+            echo "  • Learning rate scheduling visualization"
+            echo "  • Sphere constraint violation monitoring"
+            echo "  • Overfitting test progress"
+            echo "  • Model architecture and hyperparameter logging"
+        fi
     else
         echo "⚠️ No final summary found, checking for other outputs..."
         echo "Directory contents:"
         ls -la "$OUTPUT_DIR" 2>/dev/null || echo "Output directory not found"
     fi
     
+    echo ""
+    echo "🎯 Next Steps:"
+    echo "=============="
+    echo "1. Review training logs above for success indicators"
+    if [ "$USE_WANDB" = true ]; then
+        echo "2. 📊 Check WandB dashboard for detailed metrics and visualizations"
+    fi
+    echo "3. If overfitting test passed, run full-scale training:"
+    echo "   • Increase MAX_SHARDS to use more data" 
+    echo "   • Increase NUM_EPOCHS for longer training"
+    echo "   • Adjust BATCH_SIZE based on memory usage"
+    echo "4. Run comprehensive evaluation on held-out data"
+    echo "5. Try different task modes:"
+    echo "   • Change TASK_MODE to 'eva_denoising' for original task"
+    echo "   • Change TASK_MODE to 'clip_denoising' for new task"
+    echo ""
     
+    if [ "$TASK_MODE" = "eva_denoising" ]; then
+        echo "🔍 EVA DENOISING SUCCESS INDICATORS:"
+        echo "  ✅ Final EVA similarity >0.5 (good), >0.7 (excellent)"
+        echo "  ✅ Overfitting test achieves >0.8 similarity"
+        echo "  ✅ High quality ratio >50% (similarity >0.7)"
+    elif [ "$TASK_MODE" = "clip_denoising" ]; then
+        echo "🔍 CLIP DENOISING SUCCESS INDICATORS:"
+        echo "  ✅ Final CLIP similarity >0.4 (good), >0.6 (excellent)"
+        echo "  ✅ Overfitting test achieves >0.7 similarity"
+        echo "  ✅ High quality ratio >40% (similarity >0.6)"
+        echo "  ✅ Cross-attention learns 1024D ↔ 4096D mapping"
+    fi
+    
+    echo "  ✅ Non-zero gradients throughout training"
+    echo "  ✅ Decreasing loss trend"
+    echo "  ✅ Increasing similarity metrics"
+    echo "  ✅ Unit sphere constraints maintained"
+    if [ "$USE_WANDB" = true ]; then
+        echo "  📊 All metrics logged to WandB for analysis"
+    fi
+    
+    echo ""
+    echo "✅ SUCCESS: Universal denoising training completed!"
+    
+else
+    echo "❌ FAILED: Training exit code $TRAINING_EXIT_CODE"
+    echo ""
+    echo "💡 Troubleshooting Universal Implementation:"
+    echo "  • Check log files in ./slurm_out/ for detailed error messages"
+    echo "  • Verify all universal Python files are present:"
+    echo "    - train_eva_repro.py (main script)"
+    echo "    - src/modules/models/blip3o_eva_dit.py (universal model)"
+    echo "    - src/modules/losses/blip3o_eva_loss.py (universal loss)"
+    echo "    - src/modules/datasets/blip3o_eva_dataset.py (universal dataset)"
+    echo "    - src/modules/trainers/blip3o_eva_trainer.py (universal trainer)"
+    echo "    - src/modules/config/blip3o_config.py (universal config)"
+    echo "  • Check embeddings directory structure and file formats"
+    echo "  • Ensure embeddings contain both CLIP and EVA embeddings for clip_denoising"
+    echo "  • Monitor GPU memory usage with nvidia-smi"
+    echo "  • Try reducing batch_size if out-of-memory errors"
+    if [ "$USE_WANDB" = true ]; then
+        echo "  • Check WandB dashboard for any logged metrics before failure"
+    fi
+    echo ""
+    echo "🔧 Quick Recovery Options:"
+    echo "  • Start with overfitting test: --overfit_test_size 5 --batch_size 2"
+    echo "  • Use smaller model: --model_size tiny"
+    echo "  • Enable more debugging: --debug_mode --max_shards 1"
+    echo "  • Try eva_denoising task first to verify basic functionality"
+    echo "  • Check if embeddings contain both CLIP and EVA data"
+    echo "  • Disable WandB if causing issues: set USE_WANDB=false"
+fi
 
 echo ""
 echo "📊 GPU Resource Usage Summary:"
@@ -412,7 +550,7 @@ echo ""
 echo "🏁 Job completed at $(date)"
 echo "Total job time: $(echo "scale=2; ($(date +%s) - $SECONDS) / 3600" | bc -l) hours"
 echo ""
-echo "📚 UNIVERSAL ARCHITECTURE SUMMARY WITH WANDB:"
+echo "📚 UNIVERSAL ARCHITECTURE SUMMARY:"
 echo "This job tests Universal BLIP3-o DiT architecture for both EVA and CLIP denoising."
 echo "Task mode: $TASK_MODE"
 
@@ -423,16 +561,15 @@ elif [ "$TASK_MODE" = "clip_denoising" ]; then
 fi
 
 echo "Success indicates the universal architecture is correctly implemented and ready."
-echo "WandB provides comprehensive monitoring and visualization of training progress."
 
-# Final WandB summary
-if [ "$WANDB_MODE" != "disabled" ]; then
+if [ "$USE_WANDB" = true ]; then
     echo ""
-    echo "📊 WandB Summary:"
-    echo "  Project: $WANDB_PROJECT"
-    echo "  Run: $WANDB_RUN_NAME"
-    echo "  Monitor your experiment at: https://wandb.ai/$WANDB_ENTITY/$WANDB_PROJECT"
-    echo "  Look for runs tagged with: $WANDB_TAGS_EXTRA"
+    echo "📊 WandB Integration Summary:"
+    echo "✅ Comprehensive metrics logging enabled"
+    echo "✅ Real-time training visualization"
+    echo "✅ Task-specific evaluation tracking"
+    echo "✅ Project: $WANDB_PROJECT"
+    echo "✅ Run: $WANDB_RUN_NAME"
 fi
 
 echo "========================================"
