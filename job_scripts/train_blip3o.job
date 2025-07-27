@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=eva_repro_wandb_fixed
+#SBATCH --job-name=universal_denoising
 #SBATCH --partition=gpu_h100
 #SBATCH --nodes=1
 #SBATCH --gpus=3
@@ -7,21 +7,21 @@
 #SBATCH --cpus-per-task=18
 #SBATCH --time=15:00:00
 #SBATCH --mem=64G
-#SBATCH --output=./slurm_out/clip_pred_eva_guid_%j.out
-#SBATCH --error=./slurm_out/clip_pred_eva_guid_%j.err
+#SBATCH --output=./slurm_out/universal_denoising_%j.out
+#SBATCH --error=./slurm_out/universal_denoising_%j.err
 
 # =============================================================================
-# Fixed EVA-CLIP Reproduction Training with WandB Integration
-# Uses fixed implementation with proper gradient flow and WandB logging
+# Universal BLIP3-o Denoising Training - EVA & CLIP Support
+# Supports both EVA denoising and CLIP denoising with EVA conditioning
 # =============================================================================
 
-echo "🚀 Fixed EVA-CLIP Reproduction Training with WandB Integration"
-echo "=============================================================="
+echo "🚀 Universal BLIP3-o Denoising Training"
+echo "=========================================================="
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node: $(hostname)"
 echo "Time: $(date)"
 echo "GPUs: $(nvidia-smi --query-gpu=name --format=csv,noheader,nounits | tr '\n' ', ')"
-echo "=============================================================="
+echo "=========================================================="
 
 cd $SLURM_SUBMIT_DIR
 
@@ -32,64 +32,83 @@ module load Miniconda3/24.7.1-0
 module load CUDA/12.6.0
 source activate eva_clip_env
 
-# Check if WandB is installed and configured
-echo "📊 Checking WandB installation..."
-if python -c "import wandb" 2>/dev/null; then
-    echo "✅ WandB installed"
-    
-    # Check if API key is configured
-    if wandb login --relogin 2>/dev/null; then
-        echo "✅ WandB API key configured"
-    else
-        echo "⚠️ WandB API key not configured. You may need to run:"
-        echo "   wandb login YOUR_API_KEY"
-        echo "Continuing with WandB disabled..."
-        DISABLE_WANDB="--disable_wandb"
-    fi
-else
-    echo "⚠️ WandB not installed. Install with: pip install wandb"
-    echo "Continuing with WandB disabled..."
-    DISABLE_WANDB="--disable_wandb"
-fi
+# Optional: WandB login (uncomment if using WandB)
+# wandb login 0d9895af249ee18e4fa141e8a2350e0f4adb920f --relogin
 
-# Configuration
+# =============================================================================
+# TASK CONFIGURATION - Choose your task mode
+# =============================================================================
+
+# TASK_MODE options:
+# - "eva_denoising": Input/Output EVA [4096], Conditioning EVA [4096] (original task)
+# - "clip_denoising": Input/Output CLIP [1024], Conditioning EVA [4096] (NEW!)
+
+TASK_MODE="clip_denoising"          # NEW: CLIP denoising with EVA conditioning
+# TASK_MODE="eva_denoising"         # Original: EVA denoising
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
 EMBEDDINGS_DIR="/scratch-shared/azadaianchuk1/blip3o_workspace/embeddings/patch_only_256_tokens"
-OUTPUT_DIR="./checkpoints/eva_repro_wandb_fixed_$(date +%Y%m%d_%H%M%S)"
+OUTPUT_DIR="./checkpoints/universal_${TASK_MODE}_$(date +%Y%m%d_%H%M%S)"
 TRAINING_MODE="patch_only"
 MODEL_SIZE="base"
 
-# Fixed hyperparameters optimized for stable training
+# Optimized hyperparameters for universal training
 NUM_EPOCHS=10                    # Conservative epochs for initial testing
-BATCH_SIZE=8                     # Smaller batch size for stability
-LEARNING_RATE=5e-4              # Conservative learning rate
+BATCH_SIZE=8                     # Optimized batch size for stability
+LEARNING_RATE=1e-4              # Conservative learning rate for universal training
 WEIGHT_DECAY=0.01               # Standard regularization
-WARMUP_STEPS=100                # Shorter warmup for testing
-MAX_GRAD_NORM=1.0               # Gradient clipping for stability
+WARMUP_STEPS=100                # Warmup for stable training
+MAX_GRAD_NORM=1.0               # Critical for spherical flow stability
 
 # Evaluation parameters
 EVAL_EVERY_N_STEPS=100
 EVAL_NUM_SAMPLES=500
+EVAL_INFERENCE_STEPS=50
 
 # Testing configuration
 OVERFIT_TEST_SIZE=20            # Enable overfitting test to verify architecture
 DEBUG_MODE="--debug_mode"      # Enable debug logging
-MAX_SHARDS=1                    # Start with fewer shards for testing
+MAX_SHARDS=2                    # Start with fewer shards for testing
 
-# WandB configuration
-WANDB_PROJECT="eva-clip"
+# Spherical flow matching parameters
+SPHERE_CONSTRAINT_WEIGHT=0.1    # Ensures unit sphere constraints
+NOISE_SCHEDULE="uniform"        # Noise sampling schedule
+MAX_NOISE_LEVEL=0.9            # Maximum corruption level
+MIN_NOISE_LEVEL=0.1            # Minimum corruption level
 
 # Create output directory
 mkdir -p "${OUTPUT_DIR}"
 mkdir -p ./slurm_out
 
 echo ""
-echo "⚙️ Fixed EVA Reproduction Configuration with WandB:"
-echo "=================================================="
-echo "Task: Reproduce clean EVA embeddings from noisy EVA embeddings"
-echo "Conditioning: CLIP embeddings [B, N, 1024]"
-echo "Target: EVA embeddings [B, N, 4096]"
-echo "Method: Rectified Flow Matching with BLIP3-o DiT"
+echo "⚙️ Universal Denoising Configuration:"
+echo "========================================"
+
+if [ "$TASK_MODE" = "eva_denoising" ]; then
+    echo "🎯 TASK: EVA-CLIP Denoising"
+    echo "  📥 Input: Noisy EVA embeddings [B, N, 4096]"
+    echo "  🎮 Conditioning: Clean EVA embeddings [B, N, 4096]"
+    echo "  📤 Output: Clean EVA embeddings [B, N, 4096]"
+    echo "  🌊 Method: Spherical Flow Matching on 4096D hypersphere"
+    echo "  🎯 Target: Cosine similarity >0.7 (excellent), >0.5 (good)"
+elif [ "$TASK_MODE" = "clip_denoising" ]; then
+    echo "🎯 TASK: CLIP-ViT Denoising with EVA Conditioning"
+    echo "  📥 Input: Noisy CLIP embeddings [B, N, 1024]"
+    echo "  🎮 Conditioning: Clean EVA embeddings [B, N, 4096]"
+    echo "  📤 Output: Clean CLIP embeddings [B, N, 1024]"
+    echo "  🌊 Method: Spherical Flow Matching on 1024D hypersphere"
+    echo "  🧠 Architecture: Cross-attention between 1024D and 4096D spaces"
+    echo "  🎯 Target: Cosine similarity >0.6 (excellent), >0.4 (good)"
+else
+    echo "❌ Unknown task mode: $TASK_MODE"
+    exit 1
+fi
+
 echo ""
+echo "🏗️ Model: Universal BLIP3-o DiT with task-adaptive dimensions"
 echo "Embeddings: $EMBEDDINGS_DIR"
 echo "Output: $OUTPUT_DIR"
 echo "Training mode: $TRAINING_MODE"
@@ -97,6 +116,7 @@ echo "Model size: $MODEL_SIZE"
 echo "Max shards: $MAX_SHARDS"
 echo ""
 echo "📊 Training Hyperparameters:"
+echo "  Task mode: $TASK_MODE"
 echo "  Epochs: $NUM_EPOCHS"
 echo "  Batch size: $BATCH_SIZE"
 echo "  Learning rate: $LEARNING_RATE"
@@ -105,13 +125,15 @@ echo "  Warmup steps: $WARMUP_STEPS"
 echo "  Max grad norm: $MAX_GRAD_NORM"
 echo "  Overfitting test: $OVERFIT_TEST_SIZE samples"
 echo ""
+echo "🌊 Spherical Flow Parameters:"
+echo "  Sphere constraint weight: $SPHERE_CONSTRAINT_WEIGHT"
+echo "  Noise schedule: $NOISE_SCHEDULE"
+echo "  Noise range: [$MIN_NOISE_LEVEL, $MAX_NOISE_LEVEL]"
+echo ""
 echo "🔍 Evaluation Configuration:"
 echo "  Eval every: $EVAL_EVERY_N_STEPS steps"
 echo "  Eval samples: $EVAL_NUM_SAMPLES"
-echo ""
-echo "📊 WandB Configuration:"
-echo "  Project: $WANDB_PROJECT"
-echo "  Disabled: ${DISABLE_WANDB:-No}"
+echo "  Inference steps: $EVAL_INFERENCE_STEPS"
 echo ""
 
 # Verify embeddings exist
@@ -139,38 +161,55 @@ if [ $SHARD_COUNT -lt $MAX_SHARDS ]; then
     echo "   Adjusted to use $MAX_SHARDS shards"
 fi
 
-# Verify fixed training script exists
-# if [ ! -f "train_eva_repro_wandb_fixed.py" ]; then
-#     echo "❌ Fixed training script not found: train_eva_repro_wandb_fixed.py"
-#     echo "Available Python files:"
-#     ls -la *.py 2>/dev/null || echo "No Python files found"
-#     exit 1
-# fi
+# Verify universal training script exists
+if [ ! -f "train_eva_repro.py" ]; then
+    echo "❌ Universal training script not found: train_universal_denoising.py"
+    echo "Available Python files:"
+    ls -la *.py 2>/dev/null || echo "No Python files found"
+    exit 1
+fi
 
-# echo "✅ Fixed training script found"
+echo "✅ Universal training script found"
 
 echo ""
-echo "🚀 Starting Fixed EVA Reproduction Training with WandB..."
-echo "========================================================"
-echo "🧪 EXPECTED BEHAVIOR WITH FIXES:"
-echo "  ✅ Non-zero gradients from first step"
-echo "  ✅ Decreasing loss within first few epochs"
-echo "  ✅ Velocity similarity increasing from ~0.01 to >0.1"
-echo "  ✅ EVA similarity during evaluation >0.1 (good), >0.4 (excellent)"
-echo "  ✅ Overfitting test should achieve >0.8 similarity"
+echo "🚀 Starting Universal Denoising Training..."
+echo "=============================================="
+
+if [ "$TASK_MODE" = "eva_denoising" ]; then
+    echo "🧪 EXPECTED BEHAVIOR FOR EVA DENOISING:"
+    echo "  ✅ Non-zero gradients from first step"
+    echo "  ✅ Decreasing loss within first few epochs"
+    echo "  ✅ Cosine similarity increasing from ~0.01 to >0.5"
+    echo "  ✅ EVA embeddings stay on unit sphere (norm ≈ 1.0)"
+    echo "  ✅ Final similarity >0.5 (good), >0.7 (excellent)"
+    echo "  ✅ Overfitting test should achieve >0.8 similarity"
+elif [ "$TASK_MODE" = "clip_denoising" ]; then
+    echo "🧪 EXPECTED BEHAVIOR FOR CLIP DENOISING:"
+    echo "  ✅ Non-zero gradients from first step"
+    echo "  ✅ Decreasing loss within first few epochs"
+    echo "  ✅ Cosine similarity increasing from ~0.01 to >0.4"
+    echo "  ✅ CLIP embeddings stay on unit sphere (norm ≈ 1.0)"
+    echo "  ✅ Cross-attention learns 1024D ↔ 4096D mapping"
+    echo "  ✅ Final similarity >0.4 (good), >0.6 (excellent)"
+    echo "  ✅ Overfitting test should achieve >0.7 similarity"
+fi
+
 echo "  ✅ No NaN/Inf issues or tensor shape mismatches"
-echo "  ✅ Real-time metrics logging to WandB (if enabled)"
+echo "  ✅ Stable gradient norms and learning rate scheduling"
 echo ""
-echo "🏗️ ARCHITECTURE VALIDATION:"
-echo "  • BLIP3-o DiT with 3D RoPE and Grouped-Query Attention"
+echo "🏗️ UNIVERSAL ARCHITECTURE FEATURES:"
+echo "  • Task-adaptive input/output dimensions"
+echo "  • Flexible cross-attention conditioning"
+echo "  • Universal BLIP3-o DiT with 3D RoPE and Grouped-Query Attention"
 echo "  • Sandwich Normalization (RMSNorm)"
-echo "  • Rectified Flow Matching"
+echo "  • Spherical Flow Matching with SLERP interpolation"
 echo "  • Proper gradient flow and initialization"
-echo "  • WandB integration for monitoring"
+echo "  • Task-specific evaluation metrics"
 echo ""
 
-# Launch fixed EVA reproduction training with WandB
+# Launch universal denoising training
 python train_eva_repro.py \
+    --task_mode "$TASK_MODE" \
     --chunked_embeddings_dir "$EMBEDDINGS_DIR" \
     --output_dir "$OUTPUT_DIR" \
     --model_size "$MODEL_SIZE" \
@@ -181,34 +220,38 @@ python train_eva_repro.py \
     --warmup_steps $WARMUP_STEPS \
     --weight_decay $WEIGHT_DECAY \
     --max_grad_norm $MAX_GRAD_NORM \
+    --sphere_constraint_weight $SPHERE_CONSTRAINT_WEIGHT \
+    --noise_schedule $NOISE_SCHEDULE \
+    --max_noise_level $MAX_NOISE_LEVEL \
+    --min_noise_level $MIN_NOISE_LEVEL \
     --eval_every_n_steps $EVAL_EVERY_N_STEPS \
     --eval_num_samples $EVAL_NUM_SAMPLES \
+    --eval_inference_steps $EVAL_INFERENCE_STEPS \
     --overfit_test_size $OVERFIT_TEST_SIZE \
     --max_shards $MAX_SHARDS \
-    --wandb_project "$WANDB_PROJECT" \
     --fp16 \
-    $DEBUG_MODE \
-    $DISABLE_WANDB
+    $DEBUG_MODE
 
 TRAINING_EXIT_CODE=$?
 
 echo ""
 echo "========================================"
-echo "📊 Fixed EVA Reproduction Results"
+echo "📊 Universal Denoising Results"
 echo "========================================"
 
 if [ $TRAINING_EXIT_CODE -eq 0 ]; then
-    echo "✅ Fixed EVA reproduction training completed successfully!"
+    echo "✅ Universal denoising training completed successfully!"
     
     echo ""
     echo "📋 Training Summary:"
     echo "==================="
     
     # Check for training results
-    SUMMARY_FILE="$OUTPUT_DIR/final_summary.json"
+    SUMMARY_FILE="$OUTPUT_DIR/training_summary.json"
     CONFIG_FILE="$OUTPUT_DIR/experiment_config.json"
+    FINAL_SUMMARY_FILE="$OUTPUT_DIR/final_summary.json"
     
-    if [ -f "$SUMMARY_FILE" ]; then
+    if [ -f "$FINAL_SUMMARY_FILE" ]; then
         echo ""
         echo "📊 Training Results:"
         echo "==================="
@@ -218,14 +261,37 @@ if [ $TRAINING_EXIT_CODE -eq 0 ]; then
 import json
 import sys
 try:
-    with open('$SUMMARY_FILE', 'r') as f:
+    with open('$FINAL_SUMMARY_FILE', 'r') as f:
         data = json.load(f)
     
+    print(f'🎯 Task Mode: {data.get(\"task_mode\", \"unknown\")}')
     print(f'🎯 Best Loss: {data.get(\"best_loss\", float(\"inf\")):.6f}')
-    print(f'🎯 Best EVA Similarity: {data.get(\"best_eval_similarity\", 0):.4f}')
+    print(f'🎯 Best Similarity: {data.get(\"best_eval_similarity\", 0):.4f}')
     print(f'📊 Total Steps: {data.get(\"total_steps\", 0):,}')
-    print(f'⏱️ Training Time: {data.get(\"total_time_seconds\", 0):.1f} seconds')
-    print(f'📊 WandB Enabled: {data.get(\"wandb_enabled\", False)}')
+    print(f'⏱️ Training Time: {data.get(\"duration_seconds\", 0):.1f} seconds')
+    
+    # Task-specific assessment
+    task_mode = data.get('task_mode', 'unknown')
+    best_sim = data.get('best_eval_similarity', 0)
+    
+    if task_mode == 'eva_denoising':
+        if best_sim > 0.7:
+            print(f'🎉 OUTSTANDING: EVA denoising similarity > 0.7!')
+        elif best_sim > 0.5:
+            print(f'✅ GOOD: EVA denoising similarity > 0.5!')
+        elif best_sim > 0.2:
+            print(f'📈 FAIR: EVA denoising shows learning!')
+        else:
+            print(f'⚠️  NEEDS WORK: EVA similarity = {best_sim:.4f}')
+    elif task_mode == 'clip_denoising':
+        if best_sim > 0.6:
+            print(f'🎉 OUTSTANDING: CLIP denoising similarity > 0.6!')
+        elif best_sim > 0.4:
+            print(f'✅ GOOD: CLIP denoising similarity > 0.4!')
+        elif best_sim > 0.15:
+            print(f'📈 FAIR: CLIP denoising shows learning!')
+        else:
+            print(f'⚠️  NEEDS WORK: CLIP similarity = {best_sim:.4f}')
     
     # Overfitting test results
     if data.get('overfit_test', False):
@@ -236,45 +302,59 @@ try:
         else:
             print(f'   ⚠️  Architecture struggles to overfit - check implementation')
     
-    # Final evaluation
+    # Final evaluation details
     final_eval = data.get('final_eval', {})
     if final_eval:
         print(f'')
         print(f'🔍 Final Evaluation:')
-        eva_sim = final_eval.get('eval_eva_similarity', 0)
-        high_qual = final_eval.get('eval_high_quality', 0) * 100
-        very_high_qual = final_eval.get('eval_very_high_quality', 0) * 100
         
-        print(f'   Overall EVA Similarity: {eva_sim:.4f}')
-        print(f'   High Quality (>0.7): {high_qual:.1f}%')
-        print(f'   Very High Quality (>0.8): {very_high_qual:.1f}%')
-        print(f'   Samples Evaluated: {final_eval.get(\"eval_samples\", 0):,}')
-        
-        # Assessment
-        if eva_sim > 0.7:
-            print(f'   🎉 EXCELLENT: Outstanding EVA reproduction!')
-        elif eva_sim > 0.4:
-            print(f'   ✅ GOOD: Strong EVA reproduction capability!')
-        elif eva_sim > 0.1:
-            print(f'   📈 FAIR: Decent reproduction, shows learning!')
+        # Determine metric prefix based on task
+        if task_mode == 'eva_denoising':
+            metric_prefix = 'eval_eva'
+        elif task_mode == 'clip_denoising':
+            metric_prefix = 'eval_clip'
         else:
-            print(f'   ⚠️  NEEDS WORK: Low similarity, check hyperparameters')
+            metric_prefix = 'eval_generic'
+        
+        main_sim_key = f'{metric_prefix}_similarity'
+        if main_sim_key in final_eval:
+            final_sim = final_eval[main_sim_key]
+            print(f'   Overall Similarity: {final_sim:.4f}')
+            
+            high_qual_key = f'{metric_prefix}_high_quality'
+            very_high_qual_key = f'{metric_prefix}_very_high_quality'
+            
+            if high_qual_key in final_eval:
+                high_qual = final_eval[high_qual_key] * 100
+                print(f'   High Quality: {high_qual:.1f}%')
+            
+            if very_high_qual_key in final_eval:
+                very_high_qual = final_eval[very_high_qual_key] * 100
+                print(f'   Very High Quality: {very_high_qual:.1f}%')
+            
+            samples_key = f'{metric_prefix}_samples'
+            if samples_key in final_eval:
+                samples = final_eval[samples_key]
+                print(f'   Samples Evaluated: {samples:,}')
     
 except Exception as e:
-    print(f'Could not parse training summary: {e}')
+    print(f'Could not parse final summary: {e}')
     # Try to show any available checkpoints
     import os
-    checkpoints = [f for f in os.listdir('$OUTPUT_DIR') if f.endswith('.pt')]
-    if checkpoints:
-        print(f'Found {len(checkpoints)} checkpoint files')
-        print(f'Latest: {max(checkpoints)}')
+    try:
+        checkpoints = [f for f in os.listdir('$OUTPUT_DIR') if f.endswith('.pt')]
+        if checkpoints:
+            print(f'Found {len(checkpoints)} checkpoint files')
+            print(f'Latest: {max(checkpoints)}')
+    except:
+        pass
     sys.exit(1)
 "
         
         echo ""
         echo "📁 Training artifacts saved to: $OUTPUT_DIR"
     else
-        echo "⚠️ No training summary found, checking for any outputs..."
+        echo "⚠️ No final summary found, checking for other outputs..."
         echo "Directory contents:"
         ls -la "$OUTPUT_DIR" 2>/dev/null || echo "Output directory not found"
     fi
@@ -283,43 +363,60 @@ except Exception as e:
     echo "🎯 Next Steps:"
     echo "=============="
     echo "1. Review training logs above for success indicators"
-    echo "2. If using WandB, check your dashboard for detailed metrics"
-    echo "3. If overfitting test passed, run full-scale training:"
+    echo "2. If overfitting test passed, run full-scale training:"
     echo "   • Increase MAX_SHARDS to use more data" 
     echo "   • Increase NUM_EPOCHS for longer training"
     echo "   • Adjust BATCH_SIZE based on memory usage"
-    echo "4. Run comprehensive evaluation if needed"
+    echo "3. Run comprehensive evaluation on held-out data"
+    echo "4. Try different task modes:"
+    echo "   • Change TASK_MODE to 'eva_denoising' for original task"
+    echo "   • Change TASK_MODE to 'clip_denoising' for new task"
     echo ""
-    echo "🔍 SUCCESS INDICATORS:"
+    
+    if [ "$TASK_MODE" = "eva_denoising" ]; then
+        echo "🔍 EVA DENOISING SUCCESS INDICATORS:"
+        echo "  ✅ Final EVA similarity >0.5 (good), >0.7 (excellent)"
+        echo "  ✅ Overfitting test achieves >0.8 similarity"
+        echo "  ✅ High quality ratio >50% (similarity >0.7)"
+    elif [ "$TASK_MODE" = "clip_denoising" ]; then
+        echo "🔍 CLIP DENOISING SUCCESS INDICATORS:"
+        echo "  ✅ Final CLIP similarity >0.4 (good), >0.6 (excellent)"
+        echo "  ✅ Overfitting test achieves >0.7 similarity"
+        echo "  ✅ High quality ratio >40% (similarity >0.6)"
+        echo "  ✅ Cross-attention learns 1024D ↔ 4096D mapping"
+    fi
+    
     echo "  ✅ Non-zero gradients throughout training"
     echo "  ✅ Decreasing loss trend"
     echo "  ✅ Increasing similarity metrics"
-    echo "  ✅ Overfitting test achieves >0.8 similarity"
-    echo "  ✅ Final EVA similarity >0.1 (good), >0.4 (excellent)"
-    echo "  ✅ Real-time monitoring in WandB (if enabled)"
+    echo "  ✅ Unit sphere constraints maintained"
     
     echo ""
-    echo "✅ SUCCESS: Fixed EVA reproduction training completed!"
+    echo "✅ SUCCESS: Universal denoising training completed!"
     
 else
     echo "❌ FAILED: Training exit code $TRAINING_EXIT_CODE"
     echo ""
-    echo "💡 Troubleshooting the Fixed Implementation:"
+    echo "💡 Troubleshooting Universal Implementation:"
     echo "  • Check log files in ./slurm_out/ for detailed error messages"
-    echo "  • Verify all fixed Python files are present:"
-    echo "    - train_eva_repro_wandb_fixed.py (main script)"
-    echo "    - blip3o_eva_trainer_wandb.py (trainer with WandB)"
-    echo "    - blip3o_eva_dataset_fixed.py (fixed dataset)"
+    echo "  • Verify all universal Python files are present:"
+    echo "    - train_universal_denoising.py (main script)"
+    echo "    - src/modules/models/blip3o_eva_dit.py (universal model)"
+    echo "    - src/modules/losses/blip3o_eva_loss.py (universal loss)"
+    echo "    - src/modules/datasets/blip3o_eva_dataset.py (universal dataset)"
+    echo "    - src/modules/trainers/blip3o_eva_trainer.py (universal trainer)"
+    echo "    - src/modules/config/blip3o_config.py (universal config)"
     echo "  • Check embeddings directory structure and file formats"
+    echo "  • Ensure embeddings contain both CLIP and EVA embeddings for clip_denoising"
     echo "  • Monitor GPU memory usage with nvidia-smi"
     echo "  • Try reducing batch_size if out-of-memory errors"
-    echo "  • Check WandB configuration if using WandB"
     echo ""
     echo "🔧 Quick Recovery Options:"
     echo "  • Start with overfitting test: --overfit_test_size 5 --batch_size 2"
     echo "  • Use smaller model: --model_size tiny"
     echo "  • Enable more debugging: --debug_mode --max_shards 1"
-    echo "  • Disable WandB if issues: --disable_wandb"
+    echo "  • Try eva_denoising task first to verify basic functionality"
+    echo "  • Check if embeddings contain both CLIP and EVA data"
 fi
 
 echo ""
@@ -331,10 +428,17 @@ echo ""
 echo "🏁 Job completed at $(date)"
 echo "Total job time: $(echo "scale=2; ($(date +%s) - $SECONDS) / 3600" | bc -l) hours"
 echo ""
-echo "📚 ARCHITECTURE VALIDATION SUMMARY:"
-echo "This job tests BLIP3-o DiT architecture with WandB monitoring."
-echo "Success indicates the architecture is correctly implemented and ready for your main task."
-echo "WandB provides real-time monitoring and experiment tracking."
+echo "📚 UNIVERSAL ARCHITECTURE SUMMARY:"
+echo "This job tests Universal BLIP3-o DiT architecture for both EVA and CLIP denoising."
+echo "Task mode: $TASK_MODE"
+
+if [ "$TASK_MODE" = "eva_denoising" ]; then
+    echo "EVA Denoising: Validates original spherical flow matching on 4096D space."
+elif [ "$TASK_MODE" = "clip_denoising" ]; then
+    echo "CLIP Denoising: Validates cross-attention conditioning between 1024D and 4096D spaces."
+fi
+
+echo "Success indicates the universal architecture is correctly implemented and ready."
 echo "========================================"
 
 exit $TRAINING_EXIT_CODE
