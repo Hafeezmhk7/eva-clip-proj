@@ -116,17 +116,7 @@ python train_universal_denoising.py \
     --learning_rate 1e-4
 ```
 
-## 📊 Expected Performance
 
-### EVA Denoising
-- **Excellent**: Cosine similarity > 0.8
-- **Good**: Cosine similarity > 0.7  
-- **Fair**: Cosine similarity > 0.5
-
-### CLIP Denoising
-- **Excellent**: Cosine similarity > 0.7
-- **Good**: Cosine similarity > 0.6
-- **Fair**: Cosine similarity > 0.4
 
 ## 🧪 Overfitting Test
 
@@ -185,14 +175,7 @@ Each shard file contains:
 - `--max_noise_level`: 0.9 (maximum corruption)
 - `--min_noise_level`: 0.1 (minimum corruption)
 
-## 🎯 Success Indicators
-
-### During Training
-✅ **Non-zero gradients** from first step  
-✅ **Decreasing loss** trend  
-✅ **Increasing cosine similarity** (target: 0.0 → 0.5+)  
-✅ **Stable norms** ≈ 1.0 (unit sphere maintained)  
-✅ **No NaN/Inf** issues  
+ 
 
 ### Evaluation Metrics
 - **Main metric**: Cosine similarity between generated and target
@@ -217,17 +200,11 @@ Each shard file contains:
 
 ### Spherical Flow Matching
 - **SLERP interpolation**: Proper spherical interpolation [1]
-- **Velocity prediction**: More stable than noise prediction [9]
+- **Velocity prediction**: More stable than noise prediction 
 - **Unit sphere constraints**: L2 normalization enforced
 - **Gradient clipping**: Prevents instability
 
-## 🐛 Debugging
 
-### Common Issues
-1. **Negative similarities**: Check normalization, reduce learning rate
-2. **NaN gradients**: Enable gradient clipping, reduce batch size  
-3. **Poor convergence**: Try overfitting test first
-4. **Memory issues**: Reduce batch size or model size
 
 ### Debug Mode
 ```bash
@@ -258,25 +235,6 @@ src/modules/
 train_universal_denoising.py      # Main training script
 ```
 
-## 🎉 What's New
-
-### Universal Architecture
-- ✅ **Single codebase** for both EVA and CLIP denoising
-- ✅ **Task-adaptive dimensions** automatically configured
-- ✅ **Flexible cross-attention** handles different conditioning sizes
-- ✅ **Universal evaluation metrics** with task-specific thresholds
-
-### CLIP Denoising Features
-- ✅ **1024D spherical flow** for CLIP embeddings
-- ✅ **4096D EVA conditioning** via cross-attention  
-- ✅ **Proper dimension handling** throughout pipeline
-- ✅ **Task-specific quality thresholds** for evaluation
-
-### Improved Training
-- ✅ **Better initialization** for spherical flow
-- ✅ **Enhanced gradient monitoring** and clipping
-- ✅ **Task-aware logging** and metrics
-- ✅ **Comprehensive debugging** tools
 
 ## 📖 References
 
