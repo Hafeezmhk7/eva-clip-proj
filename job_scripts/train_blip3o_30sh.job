@@ -12,11 +12,11 @@
 #SBATCH --error=./slurm_out/blip3o_ddp_%j.err
 
 # =============================================================================
-# BLIP3-o Multi-GPU DDP Training - Fixed for Snellius
+# FIXED BLIP3-o Multi-GPU DDP Training - Updated for Latest PyTorch
 # =============================================================================
 
-echo "🚀 BLIP3-o Multi-GPU DDP Training"
-echo "==================================="
+echo "🚀 BLIP3-o Multi-GPU DDP Training (FIXED)"
+echo "=========================================="
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node: $(hostname)"
 echo "Time: $(date)"
@@ -24,7 +24,7 @@ echo "GPUs: ${SLURM_GPUS_ON_NODE}"
 echo "Tasks: ${SLURM_NTASKS}"
 echo "CPUs per task: ${SLURM_CPUS_PER_TASK}"
 echo "Memory: ${SLURM_MEM_PER_NODE}MB"
-echo "==================================="
+echo "=========================================="
 
 cd $SLURM_SUBMIT_DIR
 
@@ -36,7 +36,7 @@ module load CUDA/12.6.0
 source activate eva_clip_env
 
 # =============================================================================
-# CRITICAL DDP/NCCL CONFIGURATION FOR SNELLIUS
+# FIXED DDP/NCCL CONFIGURATION FOR SNELLIUS
 # =============================================================================
 
 # Get master node information
@@ -50,12 +50,15 @@ echo "  Master port: $MASTER_PORT"
 echo "  World size: $WORLD_SIZE"
 echo "  Local GPUs: ${SLURM_GPUS_ON_NODE}"
 
-# NCCL Configuration for Snellius (CRITICAL!)
+# FIXED: Updated NCCL Configuration for latest PyTorch
 export NCCL_DEBUG=INFO
 export NCCL_DEBUG_SUBSYS=INIT,ENV
 export NCCL_IB_DISABLE=0  # Enable InfiniBand if available
 export NCCL_SOCKET_IFNAME=^lo,docker0  # Exclude loopback and docker
 export NCCL_P2P_DISABLE=0  # Enable P2P for GPUs on same node
+
+# FIXED: Use new environment variable name
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1  # Updated from NCCL_ASYNC_ERROR_HANDLING
 
 # Try to detect the correct network interface
 if ip a | grep -q ib0; then
@@ -72,8 +75,11 @@ fi
 
 # Additional NCCL optimizations
 export NCCL_TREE_THRESHOLD=0
-export NCCL_ASYNC_ERROR_HANDLING=1
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+
+# FIXED: Additional stability settings
+export TORCH_NCCL_BLOCKING_WAIT=1
+export TORCH_NCCL_WAIT_TIMEOUT_DUMP_MILLIS=60000
 
 # =============================================================================
 # MEMORY OPTIMIZATION CONFIGURATION
@@ -102,7 +108,7 @@ MODEL_SIZE="base"
 TRAINING_MODE="patch_only"
 PREDICTION_TYPE="velocity"
 
-# Training hyperparameters
+# Training hyperparameters - OPTIMIZED for DDP
 LEARNING_RATE=1e-4
 BATCH_SIZE=2
 GRADIENT_ACCUMULATION_STEPS=8
@@ -144,15 +150,23 @@ echo "📁 Directory Configuration:"
 echo "  Embeddings: $EMBEDDINGS_DIR"
 echo "  Output: $OUTPUT_DIR"
 
+# Check if embeddings directory exists
+if [ ! -d "$EMBEDDINGS_DIR" ]; then
+    echo "❌ Error: Embeddings directory not found: $EMBEDDINGS_DIR"
+    echo "Available directories in /scratch-shared/azadaianchuk1/blip3o_workspace/embeddings/:"
+    ls -la /scratch-shared/azadaianchuk1/blip3o_workspace/embeddings/ || echo "Cannot list embeddings directory"
+    exit 1
+fi
+
 # =============================================================================
-# TRAINING LAUNCH WITH SRUN
+# TRAINING LAUNCH WITH SRUN (FIXED)
 # =============================================================================
 
 echo ""
 echo "🚀 Launching Multi-GPU DDP Training..."
 echo "======================================="
 
-# Launch with srun (SLURM-aware MPI launch)
+# FIXED: Launch with srun using the corrected script name
 srun --mpi=pmi2 python train_eva_repro_ddp.py \
     --task_mode "$TASK_MODE" \
     --chunked_embeddings_dir "$EMBEDDINGS_DIR" \
@@ -185,5 +199,15 @@ TRAINING_EXIT_CODE=$?
 echo ""
 echo "🏁 Job completed at $(date) with exit code $TRAINING_EXIT_CODE"
 echo "========================================"
+
+# FIXED: Print final status and cleanup info
+if [ $TRAINING_EXIT_CODE -eq 0 ]; then
+    echo "✅ Training completed successfully!"
+    echo "📁 Checkpoints saved in: $OUTPUT_DIR"
+    echo "📋 Logs available in: ./slurm_out/blip3o_ddp_${SLURM_JOB_ID}.out"
+else
+    echo "❌ Training failed with exit code: $TRAINING_EXIT_CODE"
+    echo "📋 Check logs: ./slurm_out/blip3o_ddp_${SLURM_JOB_ID}.err"
+fi
 
 exit $TRAINING_EXIT_CODE

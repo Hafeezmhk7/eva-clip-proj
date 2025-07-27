@@ -1,0 +1,35 @@
+[Rank 0] 2025-07-27 15:06:17,541 - INFO - 🚀 Multi-GPU BLIP3-o Denoising Training with DDP
+[Rank 0] 2025-07-27 15:06:17,541 - INFO - ================================================================================
+[Rank 0] 2025-07-27 15:06:17,541 - INFO - Task: clip_denoising
+[Rank 0] 2025-07-27 15:06:17,541 - INFO - World size: 3
+[Rank 0] 2025-07-27 15:06:17,541 - INFO - Device: cuda:0
+[Rank 0] 2025-07-27 15:06:17,541 - INFO - Master: gcn105:29500
+[Rank 0] 2025-07-27 15:06:17,541 - INFO - ================================================================================
+[Rank 0] 2025-07-27 15:06:25,447 - INFO - ✅ Universal denoising model loaded successfully
+[Rank 0] 2025-07-27 15:06:25,447 - INFO -   ✅ Supports: EVA denoising (4096D) & CLIP denoising (1024D)
+[Rank 0] 2025-07-27 15:06:25,449 - INFO - ✅ Universal spherical flow matching loss loaded successfully
+[Rank 0] 2025-07-27 15:06:25,450 - INFO -   ✅ Supports: Universal spherical flow for any embedding dimension
+[Rank 0] 2025-07-27 15:06:25,451 - ERROR - ❌ Universal trainer import failed: No module named 'src.modules.trainers.blip3o_eva_trainer'
+[Rank 0] 2025-07-27 15:06:25,452 - ERROR - ❌ Universal dataset import failed: No module named 'src.modules.datasets.blip3o_eva_dataset'
+[Rank 0] 2025-07-27 15:06:25,459 - INFO - ✅ Universal configuration loaded successfully
+[Rank 0] 2025-07-27 15:06:25,459 - INFO -   ✅ Supports: Task-adaptive configs for EVA & CLIP denoising
+[Rank 0] 2025-07-27 15:06:25,459 - WARNING - ⚠️ Missing original components: ['model', 'loss', 'trainer', 'dataset', 'config']
+[Rank 0] 2025-07-27 15:06:25,459 - ERROR - ❌ Missing universal components: ['universal_trainer', 'universal_dataset']
+[Rank 0] 2025-07-27 15:06:25,459 - WARNING - ⚠️ Missing backward compatibility components: ['spherical_trainer', 'spherical_dataset']
+[Rank 0] 2025-07-27 15:06:25,459 - ERROR - ❌ UNIVERSAL DENOISING components missing!
+[Rank 0] 2025-07-27 15:06:25,459 - ERROR -   Please ensure the following files are present:
+[Rank 0] 2025-07-27 15:06:25,459 - ERROR -     - src/modules/models/blip3o_eva_dit.py
+[Rank 0] 2025-07-27 15:06:25,459 - ERROR -     - src/modules/losses/blip3o_eva_loss.py
+[Rank 0] 2025-07-27 15:06:25,459 - ERROR -     - src/modules/trainers/blip3o_eva_trainer.py
+[Rank 0] 2025-07-27 15:06:25,459 - ERROR -     - src/modules/datasets/blip3o_eva_dataset.py
+[Rank 0] 2025-07-27 15:06:25,459 - ERROR -     - src/modules/config/blip3o_config.py
+[Rank 0] 2025-07-27 15:06:25,459 - WARNING - ⚠️ Some original BLIP3-o components failed to load. Check individual imports.
+[Rank 0] 2025-07-27 15:06:25,459 - ERROR - ❌ CRITICAL: No denoising components available!
+[Rank 0] 2025-07-27 15:06:25,459 - INFO - Creating base universal model for clip_denoising...
+[Rank 0] 2025-07-27 15:06:27,264 - INFO - Universal DiT model initialized with 207,351,808 parameters
+[Rank 0] 2025-07-27 15:06:27,264 - INFO -   Task: CLIP-ViT Denoising with EVA Conditioning
+[Rank 0] 2025-07-27 15:06:27,264 - INFO -   Input: Noisy CLIP [B, N, 1024]
+[Rank 0] 2025-07-27 15:06:27,264 - INFO -   Conditioning: Clean EVA [B, N, 4096]
+[Rank 0] 2025-07-27 15:06:27,264 - INFO -   Output: Clean CLIP [B, N, 1024]
+[Rank 0] 2025-07-27 15:06:27,264 - INFO -   Prediction type: velocity
+[Rank 0] 2025-07-27 15:06:27,493 - ERROR - Training failed: name 'world_size' is not defined

@@ -200,8 +200,8 @@ def cleanup_ddp():
     if dist.is_initialized():
         dist.destroy_process_group()
 
-def create_ddp_model(args, device, rank, logger):
-    """Create model and wrap with DDP"""
+def create_ddp_model(args, device, rank, world_size, local_rank, logger):
+    """Create model and wrap with DDP - FIXED"""
     try:
         from src.modules.models.blip3o_eva_dit import create_universal_model
     except ImportError:
@@ -226,7 +226,7 @@ def create_ddp_model(args, device, rank, logger):
             model, 
             device_ids=[local_rank],
             output_device=local_rank,
-            find_unused_parameters=False  # Set to True if model has unused parameters
+            find_unused_parameters=False
         )
         if rank == 0:
             logger.info(f"Model wrapped with DDP on {world_size} GPUs")
@@ -264,8 +264,8 @@ def main():
             logger.info(f"Master: {os.environ.get('MASTER_ADDR')}:{os.environ.get('MASTER_PORT')}")
             logger.info("=" * 80)
         
-        # Create model
-        model = create_ddp_model(args, device, rank, logger)
+        # Create model - FIXED: Pass all required parameters
+        model = create_ddp_model(args, device, rank, world_size, local_rank, logger)
         
         # Create loss function
         from src.modules.losses.blip3o_eva_loss import create_universal_flow_loss
@@ -275,8 +275,8 @@ def main():
             debug_mode=args.debug_mode
         )
         
-        # Create dataloaders
-        from src.modules.datasets.blip3o_eva_dataset import create_ddp_dataloaders
+        # Create dataloaders - FIXED: Use correct import
+        from src.modules.datasets.blip3o_eva_dataset_ddp import create_ddp_dataloaders
         train_dataloader, eval_dataloader = create_ddp_dataloaders(
             chunked_embeddings_dir=args.chunked_embeddings_dir,
             task_mode=args.task_mode,
@@ -294,8 +294,8 @@ def main():
             pin_memory=torch.cuda.is_available()
         )
         
-        # Create trainer
-        from src.modules.trainers.blip3o_eva_trainer import DDPDenoisingTrainer
+        # Create trainer - FIXED: Use correct import
+        from src.modules.trainers.blip3o_eva_trainer_ddp import DDPDenoisingTrainer
         trainer = DDPDenoisingTrainer(
             model=model,
             loss_fn=loss_fn,
