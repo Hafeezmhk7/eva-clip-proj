@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """
-Universal BLIP3-o Training Script - EVA & CLIP Denoising
+Universal BLIP3-o Training Script with WandB Integration - EVA & CLIP Denoising
 Supports both EVA-to-EVA and CLIP-to-CLIP (with EVA conditioning) denoising tasks
+
+Features:
+- Comprehensive WandB logging and metric tracking
+- Real-time training visualization
+- Task-specific dashboards
+- Model monitoring and alerts
 
 Usage:
   # EVA Denoising (original task)
-  python train_universal_denoising.py --task_mode eva_denoising --chunked_embeddings_dir /path/to/embeddings --output_dir ./checkpoints_eva
+  python train_eva_repro.py --task_mode eva_denoising --chunked_embeddings_dir /path/to/embeddings --output_dir ./checkpoints_eva
 
   # CLIP Denoising with EVA Conditioning (new task)  
-  python train_universal_denoising.py --task_mode clip_denoising --chunked_embeddings_dir /path/to/embeddings --output_dir ./checkpoints_clip
+  python train_eva_repro.py --task_mode clip_denoising --chunked_embeddings_dir /path/to/embeddings --output_dir ./checkpoints_clip
 """
 
 import os
@@ -20,6 +26,16 @@ import logging
 from pathlib import Path
 from datetime import datetime
 import traceback
+import socket
+import psutil
+
+# WandB Integration
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    wandb = None
 
 # Setup paths
 sys.path.insert(0, str(Path(__file__).parent))
@@ -38,8 +54,8 @@ def setup_logging(output_dir: str):
     return logging.getLogger(__name__)
 
 def parse_arguments():
-    """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description="Universal BLIP3-o Denoising Training")
+    """Parse command line arguments with WandB support"""
+    parser = argparse.ArgumentParser(description="Universal BLIP3-o Denoising Training with WandB")
     
     # Required arguments
     parser.add_argument("--chunked_embeddings_dir", type=str, required=True,
@@ -110,11 +126,154 @@ def parse_arguments():
     parser.add_argument("--num_workers", type=int, default=0,
                        help="Number of dataloader workers")
     
+    # WandB configuration
+    parser.add_argument("--use_wandb", action="store_true", default=True,
+                       help="Enable WandB logging")
+    parser.add_argument("--wandb_project", type=str, default="blip3o-universal-denoising",
+                       help="WandB project name")
+    parser.add_argument("--wandb_run_name", type=str, default=None,
+                       help="WandB run name (auto-generated if None)")
+    parser.add_argument("--wandb_tags", type=str, nargs="*", default=[],
+                       help="WandB tags for the run")
+    parser.add_argument("--wandb_notes", type=str, default="",
+                       help="WandB run notes")
+    
     return parser.parse_args()
 
+def get_system_info():
+    """Get comprehensive system information for WandB logging"""
+    info = {
+        "hostname": socket.gethostname(),
+        "cpu_count": psutil.cpu_count(),
+        "memory_gb": psutil.virtual_memory().total / (1024**3),
+        "python_version": sys.version,
+        "pytorch_version": torch.__version__,
+    }
+    
+    if torch.cuda.is_available():
+        info.update({
+            "gpu_count": torch.cuda.device_count(),
+            "gpu_name": torch.cuda.get_device_name(0),
+            "gpu_memory_gb": torch.cuda.get_device_properties(0).total_memory / (1024**3),
+            "cuda_version": torch.version.cuda,
+        })
+    
+    # Add environment info
+    info.update({
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID", "local"),
+        "slurm_node": os.environ.get("SLURM_NODELIST", "local"),
+        "user": os.environ.get("USER", "unknown"),
+    })
+    
+    return info
+
+def setup_wandb(args, logger):
+    """Setup WandB with comprehensive configuration"""
+    if not args.use_wandb:
+        logger.info("WandB disabled by user")
+        return False
+    
+    if not WANDB_AVAILABLE:
+        logger.warning("WandB not available, disabling logging")
+        return False
+    
+    try:
+        # Generate run name if not provided
+        if args.wandb_run_name is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            args.wandb_run_name = f"{args.task_mode}-{args.model_size}-{timestamp}"
+        
+        # Prepare comprehensive config
+        wandb_config = {
+            # Task and model configuration
+            "task_mode": args.task_mode,
+            "model_size": args.model_size,
+            "training_mode": args.training_mode,
+            "prediction_type": args.prediction_type,
+            
+            # Training hyperparameters
+            "learning_rate": args.learning_rate,
+            "batch_size": args.batch_size,
+            "num_epochs": args.num_epochs,
+            "warmup_steps": args.warmup_steps,
+            "weight_decay": args.weight_decay,
+            "max_grad_norm": args.max_grad_norm,
+            
+            # Spherical flow matching
+            "sphere_constraint_weight": args.sphere_constraint_weight,
+            "noise_schedule": args.noise_schedule,
+            "max_noise_level": args.max_noise_level,
+            "min_noise_level": args.min_noise_level,
+            
+            # Evaluation
+            "eval_every_n_steps": args.eval_every_n_steps,
+            "eval_num_samples": args.eval_num_samples,
+            "eval_inference_steps": args.eval_inference_steps,
+            
+            # System
+            "fp16": args.fp16,
+            "max_shards": args.max_shards,
+            "debug_mode": args.debug_mode,
+            "overfit_test_size": args.overfit_test_size,
+            
+            # Paths
+            "embeddings_dir": args.chunked_embeddings_dir,
+            "output_dir": args.output_dir,
+        }
+        
+        # Add system information
+        system_info = get_system_info()
+        wandb_config.update({f"system_{k}": v for k, v in system_info.items()})
+        
+        # Prepare tags
+        tags = list(args.wandb_tags)
+        tags.extend([
+            args.task_mode,
+            args.model_size,
+            "universal-denoising",
+            "spherical-flow-matching",
+            f"prediction-{args.prediction_type}",
+        ])
+        
+        if args.overfit_test_size:
+            tags.append("overfitting-test")
+        
+        if args.debug_mode:
+            tags.append("debug")
+        
+        # Initialize WandB
+        wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            config=wandb_config,
+            tags=tags,
+            notes=args.wandb_notes,
+            reinit=True,
+            save_code=True,
+        )
+        
+        # Log additional metadata
+        wandb.config.update({
+            "start_time": datetime.now().isoformat(),
+            "command_line": " ".join(sys.argv),
+        })
+        
+        logger.info(f"✅ WandB initialized successfully")
+        logger.info(f"  Project: {args.wandb_project}")
+        logger.info(f"  Run: {args.wandb_run_name}")
+        logger.info(f"  URL: {wandb.run.url}")
+        logger.info(f"  Tags: {tags}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize WandB: {e}")
+        logger.error("Continuing without WandB logging...")
+        return False
+
 def print_task_banner(args, logger):
-    """Print task-specific banner"""
-    logger.info("🚀 Universal BLIP3-o Denoising Training")
+    """Print task-specific banner with WandB info"""
+    logger.info("🚀 Universal BLIP3-o Denoising Training with WandB")
     logger.info("=" * 80)
     
     if args.task_mode == "eva_denoising":
@@ -137,6 +296,12 @@ def print_task_banner(args, logger):
         logger.info("  🧠 Key: Cross-attention between 1024D and 4096D spaces")
     
     logger.info("  🏗️ Model: Universal BLIP3-o DiT with cross-attention conditioning")
+    
+    if args.use_wandb and WANDB_AVAILABLE:
+        logger.info("  📊 WandB: Real-time metrics tracking enabled")
+    else:
+        logger.info("  📊 WandB: Disabled")
+    
     logger.info("=" * 80)
 
 def setup_device_and_model(args, logger):
@@ -164,7 +329,7 @@ def setup_device_and_model(args, logger):
     model = create_universal_model(
         model_size=args.model_size,
         training_mode=args.training_mode,
-        task_mode=args.task_mode,  # NEW: Specify task mode
+        task_mode=args.task_mode,
         prediction_type=args.prediction_type
     )
     
@@ -214,7 +379,7 @@ def create_dataloaders(args, logger):
     
     train_dataloader, eval_dataloader = create_universal_dataloaders(
         chunked_embeddings_dir=args.chunked_embeddings_dir,
-        task_mode=args.task_mode,  # NEW: Specify task mode
+        task_mode=args.task_mode,
         batch_size=args.batch_size,
         training_mode=args.training_mode,
         max_shards=args.max_shards,
@@ -240,14 +405,18 @@ def create_dataloaders(args, logger):
     return train_dataloader, eval_dataloader
 
 def create_trainer(model, loss_fn, train_dataloader, eval_dataloader, args, device, logger):
-    """Create universal trainer"""
+    """Create universal trainer with WandB support"""
     try:
         from src.modules.trainers.blip3o_eva_trainer import create_universal_trainer
     except ImportError:
         logger.error("Could not import universal trainer. Make sure blip3o_eva_trainer.py is present.")
         raise
     
-    logger.info("Creating universal trainer...")
+    logger.info("Creating universal trainer with WandB support...")
+    
+    # Prepare WandB tags for trainer
+    wandb_tags = list(args.wandb_tags)
+    wandb_tags.extend([args.task_mode, args.model_size])
     
     trainer = create_universal_trainer(
         model=model,
@@ -266,11 +435,16 @@ def create_trainer(model, loss_fn, train_dataloader, eval_dataloader, args, devi
         debug_mode=args.debug_mode,
         overfit_test_size=args.overfit_test_size,
         output_dir=args.output_dir,
-        task_mode=args.task_mode,  # NEW: Pass task mode
-        device=device
+        task_mode=args.task_mode,
+        device=device,
+        # WandB configuration
+        use_wandb=args.use_wandb and WANDB_AVAILABLE,
+        wandb_project=args.wandb_project,
+        wandb_run_name=args.wandb_run_name,
+        wandb_tags=wandb_tags,
     )
     
-    logger.info("Universal trainer created")
+    logger.info("Universal trainer with WandB support created")
     return trainer
 
 def validate_spherical_constraints(batch, args, logger):
@@ -300,7 +474,7 @@ def validate_spherical_constraints(batch, args, logger):
         logger.warning(f"Error during spherical constraint validation: {e}")
 
 def main():
-    """Main training function"""
+    """Main training function with comprehensive WandB integration"""
     args = parse_arguments()
     
     # Create output directory early for logging
@@ -308,6 +482,9 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     logger = setup_logging(args.output_dir)
+    
+    # Setup WandB before training
+    wandb_enabled = setup_wandb(args, logger)
     
     # Print task-specific banner
     print_task_banner(args, logger)
@@ -329,6 +506,13 @@ def main():
     if args.overfit_test_size:
         logger.info(f"  🧪 OVERFITTING TEST: {args.overfit_test_size} samples")
     logger.info(f"  Debug mode: {args.debug_mode}")
+    logger.info(f"  WandB enabled: {wandb_enabled}")
+    
+    # Log system information
+    system_info = get_system_info()
+    logger.info(f"System Information:")
+    for key, value in system_info.items():
+        logger.info(f"  {key}: {value}")
     
     logger.info("=" * 80)
     logger.info("🔧 UNIVERSAL ARCHITECTURE FEATURES:")
@@ -339,6 +523,7 @@ def main():
     logger.info("  ✅ Task-specific evaluation metrics")
     logger.info("  ✅ Gradient clipping for stability")
     logger.info("  ✅ Mixed precision training support")
+    logger.info("  ✅ Comprehensive WandB monitoring")
     logger.info("=" * 80)
     
     try:
@@ -361,7 +546,7 @@ def main():
             logger.warning(f"⚠️ Could not validate first batch: {e}")
             logger.warning("Continuing with training...")
         
-        # Create trainer
+        # Create trainer with WandB support
         trainer = create_trainer(model, loss_fn, train_dataloader, eval_dataloader, args, device, logger)
         
         # Save configuration
@@ -370,6 +555,8 @@ def main():
             'model_config': model.config.to_dict() if hasattr(model, 'config') else {},
             'timestamp': datetime.now().isoformat(),
             'experiment_type': f'universal_{args.task_mode}',
+            'system_info': system_info,
+            'wandb_enabled': wandb_enabled,
             'task_description': {
                 'task_mode': args.task_mode,
                 'input': f'Noisy {"EVA" if args.task_mode == "eva_denoising" else "CLIP"} embeddings',
@@ -377,7 +564,7 @@ def main():
                 'output': f'Clean {"EVA" if args.task_mode == "eva_denoising" else "CLIP"} embeddings',
                 'input_dim': 4096 if args.task_mode == "eva_denoising" else 1024,
                 'output_dim': 4096 if args.task_mode == "eva_denoising" else 1024,
-                'conditioning_dim': 4096,  # Always EVA for conditioning
+                'conditioning_dim': 4096,
                 'method': 'Universal Spherical Flow Matching',
                 'goal': 'High cosine similarity',
             },
@@ -389,6 +576,8 @@ def main():
                 'proper_gradient_flow',
                 'numerical_stability_improvements',
                 'task_specific_evaluation_metrics',
+                'wandb_integration',
+                'real_time_monitoring',
             ]
         }
         
@@ -398,8 +587,17 @@ def main():
         
         logger.info(f"Configuration saved to {config_path}")
         
+        # Log configuration to WandB
+        if wandb_enabled:
+            wandb.config.update(config['task_description'])
+            
+            # Upload config file as artifact
+            artifact = wandb.Artifact("experiment-config", type="config")
+            artifact.add_file(str(config_path))
+            wandb.log_artifact(artifact)
+        
         # Start training
-        logger.info(f"\n🚀 Starting {args.task_mode} training...")
+        logger.info(f"\n🚀 Starting {args.task_mode} training with WandB monitoring...")
         
         if args.task_mode == "eva_denoising":
             logger.info("Expected behavior for EVA denoising:")
@@ -422,6 +620,8 @@ def main():
         
         logger.info("  • 📈 Gradients should be stable and non-zero")
         logger.info("  • 🚫 No negative cosine similarities at convergence")
+        if wandb_enabled:
+            logger.info(f"  • 📊 Monitor real-time metrics at: {wandb.run.url}")
         logger.info("")
         
         start_time = datetime.now()
@@ -489,6 +689,9 @@ def main():
         summary['duration_seconds'] = duration
         summary['end_time'] = end_time.isoformat()
         summary['experiment_config'] = config
+        summary['wandb_enabled'] = wandb_enabled
+        if wandb_enabled:
+            summary['wandb_url'] = wandb.run.url
         
         summary_path = output_dir / 'final_summary.json'
         with open(summary_path, 'w') as f:
@@ -497,13 +700,24 @@ def main():
         logger.info(f"📁 Final summary saved to {summary_path}")
         logger.info(f"📁 Model checkpoints saved to {output_dir}")
         
+        if wandb_enabled:
+            logger.info(f"📊 WandB dashboard: {wandb.run.url}")
+            
+            # Upload final summary as artifact
+            artifact = wandb.Artifact("final-summary", type="result")
+            artifact.add_file(str(summary_path))
+            wandb.log_artifact(artifact)
+        
         logger.info("=" * 80)
         logger.info("🎯 MISSION ACCOMPLISHED:")
         logger.info(f"  ✅ {args.task_mode} training completed")
         logger.info("  ✅ Universal spherical flow matching implemented")
         logger.info("  ✅ Task-adaptive architecture working")
         logger.info("  ✅ Comprehensive evaluation performed")
+        logger.info("  ✅ WandB monitoring and logging completed")
         logger.info(f"  🎯 Final similarity: {summary.get('best_eval_similarity', 0):.4f}")
+        if wandb_enabled:
+            logger.info(f"  📊 Results dashboard: {wandb.run.url}")
         logger.info("=" * 80)
         
         # Return appropriate exit code
@@ -518,11 +732,21 @@ def main():
     except Exception as e:
         logger.error(f"❌ Training failed with error: {e}")
         traceback.print_exc()
+        
+        if wandb_enabled:
+            wandb.log({"training_failed": True, "error": str(e)})
+            wandb.finish(exit_code=1)
+        
         return 1
     
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
-        return 1
+        
+        if wandb_enabled:
+            wandb.log({"training_interrupted": True})
+            wandb.finish(exit_code=130)
+        
+        return 130
 
 if __name__ == "__main__":
     exit_code = main()
